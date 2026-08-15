@@ -69,6 +69,79 @@ function doGet(e) {
 }
 
 
+/* ══════════ 照片上傳（POST） ══════════
+   照片不能走 JSONP：JSONP 是把資料塞進網址，幾千字元就爆了。
+   前端用 Content-Type: text/plain 送 JSON，是為了避開 CORS preflight
+   （Apps Script 不回應 OPTIONS，一 preflight 就整個掛掉）。 */
+
+function doPost(e) {
+  try {
+    var p = JSON.parse((e && e.postData && e.postData.contents) || '{}');
+    if (p.token !== API_CONFIG.TOKEN) {
+      return jsonOut_({ error: 'BAD_TOKEN', message: '通行碼錯誤' }, '');
+    }
+    if (p.action === 'uploadPhoto') return jsonOut_(uploadPhoto_(p), '');
+    return jsonOut_({ error: 'BAD_ACTION', message: '不支援的動作：' + p.action }, '');
+  } catch (err) {
+    return jsonOut_({ error: 'SERVER_ERROR', message: String((err && err.message) || err) }, '');
+  }
+}
+
+/* 照片放這個 Drive 資料夾，資料夾 id 記在指令碼屬性裡，不必每次用名字找 */
+const PHOTO_FOLDER_NAME = '2026卓青營-行李照片';
+
+function photoFolder_() {
+  var props = PropertiesService.getScriptProperties();
+  var id = props.getProperty('PHOTO_FOLDER_ID');
+  if (id) { try { return DriveApp.getFolderById(id); } catch (e) {} }
+  var it = DriveApp.getFoldersByName(PHOTO_FOLDER_NAME);
+  var f  = it.hasNext() ? it.next() : DriveApp.createFolder(PHOTO_FOLDER_NAME);
+  props.setProperty('PHOTO_FOLDER_ID', f.getId());
+  return f;
+}
+
+function uploadPhoto_(p) {
+  var row = Number(p.row);
+  if (!row || row < 2) return { error: 'BAD_ROW',  message: '列號不正確' };
+  if (!p.data)         return { error: 'NO_DATA',  message: '沒有收到照片' };
+
+  var sheet   = SpreadsheetApp.getActive().getSheetByName(CONFIG.SOURCE_SHEET);
+  var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
+  var col     = headers.lastIndexOf(String(p.header || ''));
+  if (col < 0) return { error: 'NO_COLUMN', message: '名單第一列找不到「' + p.header + '」欄' };
+
+  var sid   = sheet.getRange(row, 1).getDisplayValue();
+  var name  = sheet.getRange(row, 2).getDisplayValue();
+  var now   = Utilities.formatDate(new Date(), 'GMT+8', 'yyyy/MM/dd HH:mm:ss');
+  var stamp = Utilities.formatDate(new Date(), 'GMT+8', 'yyyyMMdd-HHmmss');
+
+  var blob = Utilities.newBlob(
+    Utilities.base64Decode(p.data),
+    p.mime || 'image/jpeg',
+    [sid, name, p.header, stamp].join('_') + '.jpg'
+  );
+  var file = photoFolder_().createFile(blob);
+  file.setDescription('拍攝：' + (p.op || '') + '　' + now);
+
+  // 幹部手機多半沒登入你們的 Google 帳號，圖要顯示得出來就得開連結檢視。
+  // 公司帳號若禁止對外共用，這裡會失敗 —— 照片還是存下來了，只是前端顯示不出縮圖。
+  var shared = true;
+  try {
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  } catch (e) {
+    shared = false;
+  }
+
+  // 存「純網址文字」而不是 =IMAGE()：前端讀名單用 getDisplayValues()，
+  // 公式的顯示值是圖片本身、拿不到網址，重新整理後就找不到照片了。
+  // 想在 Sheet 上直接看縮圖，另開一欄放 =IMAGE(Q2) 就好。
+  var url = 'https://lh3.googleusercontent.com/d/' + file.getId();
+  sheet.getRange(row, col + 1).setValue(url);
+
+  return { success: true, url: url, fileId: file.getId(), time: now, shared: shared };
+}
+
+
 function handleApi_(p) {
   var cb = p.callback || '';
   try {

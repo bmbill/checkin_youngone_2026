@@ -93,6 +93,24 @@
     .result-tags { display: flex; gap: 4px; margin: 4px 0; }
     .tag-item { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: #fdfaf8; border: 1px solid var(--m-coffee); color: var(--m-coffee); font-weight: bold; }
     .tag-warn { font-size: 12px; padding: 2px 8px; border-radius: 4px; background: #fdecea; border: 1px solid var(--danger); color: var(--danger); font-weight: bold; }
+    /* 行李照片 */
+    .photo-row { display: flex; gap: 10px; margin-bottom: 20px; }
+    .photo-slot { flex: 1; border: 2px dashed var(--m-border); border-radius: 12px; background: #fafafa;
+                  overflow: hidden; display: flex; flex-direction: column; }
+    .photo-slot.filled { border-style: solid; border-color: var(--m-sage); background: #fff; }
+    .photo-label { font-size: 13px; font-weight: bold; color: var(--m-coffee); text-align: center; padding: 8px 4px; }
+    .photo-body { flex: 1; display: flex; align-items: center; justify-content: center; padding: 0 8px; min-height: 90px; }
+    .photo-body img { width: 100%; border-radius: 8px; display: block; }
+    .photo-take { background: none; border: none; font-size: 40px; color: #ccc; line-height: 1; padding: 20px; }
+    .photo-state { font-size: 11px; text-align: center; padding: 6px 4px; min-height: 14px; color: #999; }
+    .photo-state.ok { color: var(--success); font-weight: bold; }
+    .photo-state.err { color: var(--danger); font-weight: bold; }
+    .photo-retry { margin-left: 4px; background: var(--danger); color: #fff; border: none;
+                   border-radius: 4px; padding: 2px 8px; font-size: 11px; font-weight: bold; }
+
+    .room-head { display: flex; justify-content: space-between; align-items: baseline; padding: 12px 15px; margin-bottom: 4px;
+                 background: #fdfaf8; border: 1px solid var(--m-coffee); border-radius: 8px;
+                 color: var(--m-coffee); font-size: 18px; font-weight: bold; }
     .status-undone { color: var(--danger); font-size: 14px; font-weight: bold; }
     .status-done { color: var(--success); font-size: 14px; font-weight: bold; }
     .btn-action { background: var(--m-blue); color: white; border: none; padding: 10px 20px; border-radius: 20px; font-weight: bold; cursor: pointer; }
@@ -208,7 +226,7 @@
 
   <div class="search-group">
     <div class="search-input-wrapper">
-      <input type="text" id="keyword" class="search-input" placeholder="搜尋編號、姓名" onkeypress="if(event.keyCode==13) query()">
+      <input type="text" id="keyword" class="search-input" placeholder="搜尋編號、姓名、房號" onkeypress="if(event.keyCode==13) query()">
       <button class="search-clear-btn" onclick="clearSearch()">✕</button>
     </div>
     <button class="btn-search" onclick="query()">搜尋</button>
@@ -453,6 +471,21 @@
     return matches;
   }
 
+  /* 房號搜尋：完全相符才算（打 18 不會撈出 1810 整層樓）。
+     刻意「不」放進 findMatches，因為掃碼會共用那支，
+     自動連掃只要命中一筆就直接報到，房號進去太危險。 */
+  function findRoom(keyword) {
+    var k = String(keyword || '').trim().toLowerCase();
+    var out = [], ri = colRoom();
+    if (!k) return out;
+    for (var i = 0; i < fullDataRows.length; i++) {
+      if (String(fullDataRows[i][ri] || '').trim().toLowerCase() === k) {
+        out.push({ row: i + 2, values: fullDataRows[i] });
+      }
+    }
+    return out;
+  }
+
   function query() {
     const inputField = document.getElementById('keyword');
     var k = inputField.value.trim();
@@ -464,6 +497,19 @@
     // 反射動作 2：切換顯示
     document.getElementById('listArea').innerHTML = "";
     document.getElementById('editArea').style.display = "none";
+
+    // 房號優先：整間房一起看，就算只住一個人也維持清單樣式不直接跳報到面板
+    var mates = findRoom(k);
+    if (mates.length) {
+      var done = 0;
+      mates.forEach(function(it){ if (it.values[sysIndices.check] == "1") done++; });
+      renderList(mates, '<div class="room-head"><span>' + k + ' 房</span><span class="' +
+                 (done === mates.length ? 'status-done' : 'status-undone') + '">' +
+                 done + ' / ' + mates.length + ' 已報到</span></div>');
+      setTimeout(() => { forceReflow(); }, 50);
+      return;
+    }
+
     var matches = findMatches(k);
 
     if (matches.length === 0) {
@@ -478,8 +524,8 @@
     setTimeout(() => { forceReflow(); }, 50);
   }
 
-  function renderList(items) {
-    var h = '<div style="margin-top:10px;">';
+  function renderList(items, header) {
+    var h = '<div style="margin-top:10px;">' + (header || '');
     items.forEach(function(item) {
       var v = item.values; var isDone = (v[sysIndices.check] == "1");
       h += '<div class="result-item">' +
@@ -505,6 +551,7 @@
 
   function showEdit(item) {
     currentEditRowData = item;
+    photoRetry = {};   // 換人了，上一個人沒傳成功的照片不再留著
     var v = item.values; var isDone = (v[sysIndices.check] == "1");
 
     // 反射動作 1：關閉鍵盤 (以防是從搜尋框直接跳轉過來)
@@ -523,7 +570,8 @@
          '  </div>' +
          '  <textarea id="noteInp" class="note-input-mega" placeholder="備註...">' + (v[sysIndices.note]||'') + '</textarea>' +
          '</div>';
-    h += '<button id="saveBtn" class="btn-save-mega" onclick="save('+item.row+')">確認寫入雲端</button>';
+    h += '<button id="saveBtn" class="btn-save-mega" onclick="save('+item.row+')">學員狀態更新</button>';
+    h += photoSlotsHtml(item);
     h += '</div>';
 
     // 反射動作 2：切換顯示
@@ -542,6 +590,151 @@
       document.documentElement.scrollTop = targetTop;
       document.getElementById('mainContainer').scrollTop = targetTop;
     }, 150);
+  }
+
+  /* ══════════ 行李照片：Q 寄放行李 / R 房間行李紀錄 ══════════
+     兩張照片是兩個獨立流程（報到台收行李、行李送進房間），
+     可能隔幾小時、不同幹部，所以拍完各自立刻上傳，
+     不跟「學員狀態更新」按鈕綁在一起。 */
+
+  var PHOTO_COLS = [
+    { key: 'bag',  header: '寄放行李',     label: '寄放行李' },
+    { key: 'room', header: '房間行李紀錄', label: '房間行李' }
+  ];
+  var photoRetry = {};   // 上傳失敗的照片留在這，按重試才不用重拍
+
+  function photoCol(key)   { return PHOTO_COLS.filter(function(c){ return c.key === key; })[0]; }
+  function photoIndex(hdr) { return currentHeaders.indexOf(hdr); }
+  function photoState(key) { return document.getElementById('state_' + key); }
+
+  /* 只有我們自己上傳的 lh3 網址才能加尺寸後綴，手動貼的網址原樣輸出 */
+  function thumbUrl(url) {
+    return /^https:\/\/lh3\.googleusercontent\.com\/d\//.test(url) ? url + '=w400' : url;
+  }
+
+  function photoSlotsHtml(item) {
+    var v = item.values;
+    var h = '<div class="photo-row">';
+    PHOTO_COLS.forEach(function (c) {
+      var idx = photoIndex(c.header);
+      var url = idx >= 0 ? String(v[idx] || '').trim() : '';
+      h += '<div class="photo-slot' + (url ? ' filled' : '') + '" id="slot_' + c.key + '">' +
+           '<div class="photo-label">📷 ' + c.label + '</div>' +
+           '<div class="photo-body">' + photoBodyHtml(c.key, url) + '</div>' +
+           '<div class="photo-state" id="state_' + c.key + '">' +
+             (idx < 0 ? '名單沒有「' + c.header + '」欄' : (url ? '點照片可重拍' : '')) +
+           '</div>' +
+           '<input type="file" accept="image/*" capture="environment" id="file_' + c.key + '" ' +
+                  'style="display:none" onchange="onPhotoPicked(\'' + c.key + '\',' + item.row + ',this)">' +
+           '</div>';
+    });
+    return h + '</div>';
+  }
+
+  function photoBodyHtml(key, url) {
+    var open = 'document.getElementById(\'file_' + key + '\').click()';
+    if (url) return '<img src="' + thumbUrl(url) + '" onclick="' + open + '" alt="">';
+    return '<button class="photo-take" onclick="' + open + '">＋</button>';
+  }
+
+  /* 4G/5G 現場：長邊壓到 1024、JPEG 0.6，大約 60～150KB。
+     不壓縮的話一張手機照 3～4MB，現場根本傳不完。 */
+  function shrinkImage(file, maxSide, quality) {
+    maxSide = maxSide || 1024; quality = quality || 0.6;
+    return new Promise(function (resolve, reject) {
+      var img = new Image(), src = URL.createObjectURL(file);
+      img.onload = function () {
+        URL.revokeObjectURL(src);
+        var s = Math.min(1, maxSide / Math.max(img.width, img.height));
+        var cv = document.createElement('canvas');
+        cv.width  = Math.round(img.width  * s);
+        cv.height = Math.round(img.height * s);
+        cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+        resolve(cv.toDataURL('image/jpeg', quality));
+      };
+      img.onerror = function () { URL.revokeObjectURL(src); reject(new Error('照片讀取失敗')); };
+      img.src = src;
+    });
+  }
+
+  function onPhotoPicked(key, row, input) {
+    var file = input.files && input.files[0];
+    input.value = '';                       // 清掉才能重拍同一個位置
+    if (!file) return;
+    if (!opName()) { alert('請先填上你的名字'); document.getElementById('operatorName').focus(); return; }
+
+    var st = photoState(key);
+    st.className = 'photo-state'; st.innerText = '處理中...';
+    shrinkImage(file).then(function (dataUrl) {
+      document.querySelector('#slot_' + key + ' .photo-body').innerHTML = '<img src="' + dataUrl + '" alt="">';
+      document.getElementById('slot_' + key).className = 'photo-slot filled';
+      sendPhoto(key, row, photoCol(key).header, dataUrl);       // 先顯示本機預覽，再上傳
+    }).catch(function (e) {
+      st.className = 'photo-state err'; st.innerText = e.message || '照片讀取失敗';
+    });
+  }
+
+  async function sendPhoto(key, row, header, dataUrl) {
+    /* 上傳期間幹部可能已經切到別人身上了，那就只更新資料、不要去動畫面，
+       否則狀態會寫到別人的格子上。 */
+    function st() {
+      return (currentEditRowData && currentEditRowData.row === row) ? photoState(key) : null;
+    }
+    photoRetry[key] = { row: row, header: header, dataUrl: dataUrl };
+    var el = st();
+    if (el) { el.className = 'photo-state'; el.innerText = '上傳中...'; }
+    try {
+      var res = await uploadPhoto(row, header, dataUrl);
+      var idx = photoIndex(header);
+      if (idx >= 0) fullDataRows[row - 2][idx] = res.url;
+      delete photoRetry[key];
+      el = st();
+      if (el) {
+        el.className = 'photo-state ok';
+        el.innerText = res.shared === false ? '✓ 已上傳（無法共用，圖顯示不出來）' : '✓ 已上傳';
+      }
+    } catch (err) {
+      el = st();
+      if (el) {
+        el.className = 'photo-state err';
+        el.innerHTML = '✗ ' + String((err && err.message) || err).slice(0, 16) +
+                       ' <button class="photo-retry" onclick="retryPhoto(\'' + key + '\')">重試</button>';
+      }
+    }
+  }
+
+  function retryPhoto(key) {
+    var p = photoRetry[key];
+    if (p) sendPhoto(key, p.row, p.header, p.dataUrl);
+  }
+
+  /* 照片一定得走 POST：JSONP 是把資料塞進網址，幾千字元就爆了，照片是幾十萬。
+     Content-Type 用 text/plain 是刻意的 —— 這樣才算 simple request，
+     不會觸發 CORS preflight。Apps Script 不回應 OPTIONS，一 preflight 就整個掛掉。 */
+  async function uploadPhoto(row, header, dataUrl, retries) {
+    retries = (retries === undefined) ? 2 : retries;
+    var body = JSON.stringify({
+      token: TOKEN, action: 'uploadPhoto', row: row, header: header,
+      op: opName(), mime: 'image/jpeg', data: dataUrl.split(',')[1]
+    });
+    var lastErr;
+    for (var i = 0; i <= retries; i++) {
+      try {
+        var resp = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: body
+        });
+        var out = await resp.json();
+        if (out.error) throw new Error(out.message || out.error);
+        setNetOK(true);
+        return out;
+      } catch (err) {
+        lastErr = err;
+        if (i < retries) await new Promise(function (r) { setTimeout(r, 1500); });
+      }
+    }
+    throw lastErr;
   }
 
   function toggleCheck() {
@@ -576,7 +769,7 @@
 
   async function save(row) {
     var btn = document.getElementById('saveBtn');
-    btn.disabled = true; btn.innerText = "⏳ 寫入中...";
+    btn.disabled = true; btn.innerText = "⏳ 更新中...";
     var isCheck = document.getElementById('isCheck').checked;
     var op = opName();
     var note = noteWithOp(document.getElementById('noteInp').value, op);
@@ -604,6 +797,11 @@
   function closeSuccess() { document.getElementById('successOverlay').style.display = 'none'; clearUI(); }
 
   function clearUI() {
+    // 有照片還卡在失敗狀態就先擋一下，離開就得重拍
+    if (Object.keys(photoRetry).length &&
+        !confirm('有行李照片還沒上傳成功，離開就要重拍。確定離開？')) return;
+    photoRetry = {};
+
     // 反射動作 1：關閉鍵盤
     document.activeElement.blur();
 

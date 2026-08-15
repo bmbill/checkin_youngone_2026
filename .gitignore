@@ -2,3 +2,6 @@
 *.jpg
 *.jpeg
 *.png
+
+# 本機測試用（python -m http.server，測 localStorage 需要真的 http://）
+.claude/
