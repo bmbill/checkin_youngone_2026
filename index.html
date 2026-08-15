@@ -93,6 +93,9 @@
     .result-tags { display: flex; gap: 4px; margin: 4px 0; }
     .tag-item { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: #fdfaf8; border: 1px solid var(--m-coffee); color: var(--m-coffee); font-weight: bold; }
     .tag-warn { font-size: 12px; padding: 2px 8px; border-radius: 4px; background: #fdecea; border: 1px solid var(--danger); color: var(--danger); font-weight: bold; }
+    .done-banner { background: #f0fff4; border: 1.5px solid var(--success); color: var(--success);
+                   border-radius: 10px; padding: 10px 12px; font-size: 14px; font-weight: bold;
+                   text-align: center; margin-bottom: 12px; }
     .note-log { background: #f8f8f8; border: 1px solid #f0f0f0; border-radius: 8px; padding: 10px 12px;
                 font-size: 12px; color: #888; line-height: 1.8; margin: -6px 0 15px; }
 
@@ -205,6 +208,7 @@
     <div class="sync-time-row">
       <span id="pendingTag" class="pending-tag"></span>
       <span id="syncDisplay" class="sync-time">上次同步：--:--:--</span>
+      <span id="appVer" class="sync-time"></span>
     </div>
   </div>
 
@@ -233,6 +237,12 @@
   <div id="reader"></div>
   <div id="scanInfo" class="scan-info" style="display:none;"></div>
 
+  <!-- 即時掃描讀不到時的第二條路：用手機原生相機拍一張高解析度靜態照來辨識 -->
+  <button class="btn-camera" style="background:var(--m-blue);"
+          onclick="document.getElementById('snapFile').click()">🖼️ 拍照辨識（掃不到時用）</button>
+  <input type="file" accept="image/*" capture="environment" id="snapFile"
+         style="display:none" onchange="scanFromPhoto(this)">
+
   <div class="search-group">
     <div class="search-input-wrapper">
       <input type="text" id="keyword" class="search-input" placeholder="搜尋編號、姓名、房號" onkeypress="if(event.keyCode==13) query()">
@@ -250,6 +260,10 @@
      ① 部署後只要改這一行
      ══════════════════════════════════════════════════════ */
   const API_URL = 'https://script.google.com/macros/s/AKfycbwA7ZkcnBq6vRA-etn8cclum03wvXE3bSOT6IeIv__tuZodCpwkGU70KKw1NQnILMTB/exec';
+
+  /* 版本號直接印在畫面右上角。GitHub Pages 會被手機快取十幾分鐘，
+     沒有這個就永遠在猜「手機上到底是不是新版」—— 改版時記得一起改。 */
+  const APP_VERSION = 'v8';
 
   // 通行碼「不」寫在這裡：本檔會公開在網路上，寫死等於把鑰匙貼在門口。
   // 改由幹部第一次開啟時輸入一次，存在他自己手機裡。
@@ -451,6 +465,8 @@
   }
 
   /* 新增：用標題名稱找欄位，名稱找不到才退回固定位置，中間插欄也不會錯位 */
+  document.getElementById('appVer').innerText = '　' + APP_VERSION;
+
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
@@ -564,9 +580,9 @@
     }, 80);
   }
 
-  function showEdit(item) {
+  function showEdit(item, done) {
     currentEditRowData = item;
-    photoRetry = {};   // 換人了，上一個人沒傳成功的照片不再留著
+    if (!done) photoRetry = {};   // 換人了，上一個人沒傳成功的照片不再留著
     var v = item.values; var isDone = (v[sysIndices.check] == "1");
 
     // 反射動作 1：關閉鍵盤 (以防是從搜尋框直接跳轉過來)
@@ -575,6 +591,7 @@
     var h = '<div class="edit-container">';
     h += '<div class="name-title"><div>' + v[1] + '<span style="font-size:15px; color:#999; font-weight:normal;"> ' + v[0] + '</span></div>' +
             '<button onclick="clearUI()" style="background:none; border:none; font-size:24px; color:#ccc;">✕</button></div>';
+    if (done) h += '<div class="done-banner">✓ 已完成更新　' + esc(v[sysIndices.time] || '') + '</div>';
     if (payWarn(v)) h += '<div style="margin:-6px 0 12px;"><span class="tag-warn">⚠ '+payWarn(v)+'</span></div>';
     h += '<div class="room-info-strip"><div class="room-item">組別 <span>'+(v[colGroup()]||'-')+'</span></div><div class="room-item">房號 <span>'+(v[colRoom()]||'-')+'</span></div></div>';
     h += '<div class="action-row-mega" id="mainActionArea">' +
@@ -852,7 +869,17 @@
     setTimeout(closeSuccess, 1500);
   }
 
-  function closeSuccess() { document.getElementById('successOverlay').style.display = 'none'; clearUI(); }
+  /* 更新完不要把畫面清空 —— 幹部常常要接著拍行李照、或再補一筆備註。
+     留在同一個學員身上，用綠色橫幅標示已完成，紀錄也一併重畫。
+     要換下一個人就按 ✕ 或直接搜尋。 */
+  function closeSuccess() {
+    document.getElementById('successOverlay').style.display = 'none';
+    if (currentEditRowData && fullDataRows[currentEditRowData.row - 2]) {
+      showEdit({ row: currentEditRowData.row, values: fullDataRows[currentEditRowData.row - 2] }, true);
+    } else {
+      clearUI();
+    }
+  }
 
   function clearUI() {
     // 有照片還卡在失敗狀態就先擋一下，離開就得重拍
@@ -905,6 +932,20 @@
     el._t = setTimeout(function(){ el.style.display = 'none'; }, 1800);
   }
 
+  /* 這兩個設定是靈敏度的關鍵：
+     - formatsToSupport 只留 QR：不必再逐一試 Code128、EAN 等十幾種條碼格式
+     - useBarCodeDetectorIfSupported：有瀏覽器原生解碼器就用，對角度、模糊、
+       反光的容忍度高得多。但 iOS 至今沒有這個 API，只能退回 JS 解碼 ——
+       斜著掃不出來多半就是這個原因，診斷列會顯示是哪一種。 */
+  function newScanner() {
+    return new Html5Qrcode("reader", {
+      verbose: false,
+      formatsToSupport: (typeof Html5QrcodeSupportedFormats !== 'undefined')
+        ? [Html5QrcodeSupportedFormats.QR_CODE] : undefined,
+      experimentalFeatures: { useBarCodeDetectorIfSupported: true }
+    });
+  }
+
   async function toggleScanner() {
     var r = document.getElementById('reader'), sBtn = document.getElementById('scanBtn');
 
@@ -921,16 +962,7 @@
 
     r.style.display = 'block'; sBtn.innerText = '❌ 關閉相機';
 
-    /* 建構子這兩個設定是靈敏度的關鍵：
-       - formatsToSupport 只留 QR：不必再逐一試 Code128、EAN 等十幾種條碼格式
-       - useBarCodeDetectorIfSupported：能用瀏覽器原生解碼器就用，
-         比套件內建的 JS 解碼快很多，對角度、模糊、反光的容忍度也高得多 */
-    html5QrCode = html5QrCode || new Html5Qrcode("reader", {
-      verbose: false,
-      formatsToSupport: (typeof Html5QrcodeSupportedFormats !== 'undefined')
-        ? [Html5QrcodeSupportedFormats.QR_CODE] : undefined,
-      experimentalFeatures: { useBarCodeDetectorIfSupported: true }
-    });
+    html5QrCode = html5QrCode || newScanner();
 
     try {
       await html5QrCode.start(
@@ -1001,6 +1033,27 @@
     el.innerText = (s.width || '?') + '×' + (s.height || '?') + '　' +
                    (('BarcodeDetector' in window) ? '原生解碼' : 'JS 解碼');
     el.style.display = 'block';
+  }
+
+  /* 拍照辨識：即時掃描讀的是 1080p 的video 影格，手機原生相機拍的靜態照
+     是一千多萬像素、對焦準、又沒有動態模糊，斜的、小的都好解得多。
+     iOS 沒有原生 QR 解碼器、只能用 JS 解碼，這條路的差距特別明顯。 */
+  async function scanFromPhoto(input) {
+    var f = input.files && input.files[0];
+    input.value = '';
+    if (!f) return;
+
+    if (html5QrCode && html5QrCode.isScanning) await toggleScanner();   // 相機開著就先關掉
+    html5QrCode = html5QrCode || newScanner();
+
+    flash('dup', '辨識中...');
+    try {
+      var txt = await html5QrCode.scanFile(f, false);
+      onScanned(txt);
+    } catch (e) {
+      beep(300, 250);
+      flash('err', '這張照片認不出 QR，靠近一點重拍，或直接用下面搜尋');
+    }
   }
 
   function onScanned(txt) {
