@@ -92,6 +92,7 @@
     .result-id-small { color: #999; font-size: 14px; margin-left: 8px; }
     .result-tags { display: flex; gap: 4px; margin: 4px 0; }
     .tag-item { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: #fdfaf8; border: 1px solid var(--m-coffee); color: var(--m-coffee); font-weight: bold; }
+    .tag-warn { font-size: 12px; padding: 2px 8px; border-radius: 4px; background: #fdecea; border: 1px solid var(--danger); color: var(--danger); font-weight: bold; }
     .status-undone { color: var(--danger); font-size: 14px; font-weight: bold; }
     .status-done { color: var(--success); font-size: 14px; font-weight: bold; }
     .btn-action { background: var(--m-blue); color: white; border: none; padding: 10px 20px; border-radius: 20px; font-weight: bold; cursor: pointer; }
@@ -200,14 +201,14 @@
   <!-- 相機掃描功能（外部主機版已啟用） -->
   <button class="btn-camera" id="scanBtn" onclick="toggleScanner()">📷 開啟相機掃描</button>
   <div class="scan-opt">
-    <input type="checkbox" id="autoMode" checked>
+    <input type="checkbox" id="autoMode">
     <label for="autoMode">掃到就直接報到（連續掃描，不用按確認）</label>
   </div>
   <div id="reader"></div>
 
   <div class="search-group">
     <div class="search-input-wrapper">
-      <input type="text" id="keyword" class="search-input" placeholder="搜尋姓名、學代" onkeypress="if(event.keyCode==13) query()">
+      <input type="text" id="keyword" class="search-input" placeholder="搜尋編號、姓名" onkeypress="if(event.keyCode==13) query()">
       <button class="search-clear-btn" onclick="clearSearch()">✕</button>
     </div>
     <button class="btn-search" onclick="query()">搜尋</button>
@@ -247,7 +248,7 @@
   const ARG_MAP = {
     getAllData:      [],
     getDeltaUpdates: ['lastSyncTime', 'localTotalRows'],
-    updateData:      ['row', 'check', 'note', 'guard']
+    updateData:      ['row', 'check', 'note', 'op', 'guard']
   };
   var jsonpSeq = 0;
 
@@ -313,7 +314,7 @@
     while (pendingQueue.length) {
       const job = pendingQueue[0];
       try {
-        await callServer('updateData', [job.row, job.check, job.note, job.guard], 1);
+        await callServer('updateData', [job.row, job.check, job.note, job.op, job.guard], 1);
         pendingQueue.shift();
         savePending();
       } catch (e) { break; }   // 還是不通就留著，下一輪再試
@@ -359,7 +360,7 @@
       const res = await callServer('getAllData');
       fullDataRows = res.rows; currentHeaders = res.headers; sysIndices = res.sysIndices;
       lastSyncTime = res.serverTime; currentTotalRows = res.totalRows;
-      localStorage.setItem('ck_roster', JSON.stringify(res));   // 新增：離線快取
+      localStorage.setItem('ck_roster_v2', JSON.stringify(res));   // 新增：離線快取
       document.getElementById('loadingOverlay').style.display = 'none';
       updateStatsUI();
       updateSyncTime();
@@ -374,7 +375,7 @@
         return;
       }
       // 連不上時改用上次的離線快取，讓幹部至少能繼續作業
-      const cache = localStorage.getItem('ck_roster');
+      const cache = localStorage.getItem('ck_roster_v2');
       if (cache) {
         const res = JSON.parse(cache);
         fullDataRows = res.rows; currentHeaders = res.headers; sysIndices = res.sysIndices;
@@ -385,7 +386,7 @@
         document.getElementById('syncDisplay').className = 'sync-time warning';
         setInterval(autoSync, 30000);
       } else {
-        alert('連線不穩，請重新載入');
+        alert('無法載入名單：' + String((err && err.message) || err));
       }
     }
   }
@@ -403,7 +404,7 @@
       if (res.updates?.length > 0) { res.updates.forEach(upd => { fullDataRows[upd.row - 2] = upd.values; }); updateStatsUI(); }
       if (res.newRows?.length > 0) { res.newRows.forEach(newR => { fullDataRows.push(newR.values); }); currentTotalRows = res.serverTotalRows; updateStatsUI(); }
       lastSyncTime = res.serverTime; updateSyncTime();
-      localStorage.setItem('ck_roster', JSON.stringify({
+      localStorage.setItem('ck_roster_v2', JSON.stringify({
         headers: currentHeaders, rows: fullDataRows, serverTime: lastSyncTime,
         totalRows: currentTotalRows, sysIndices: sysIndices
       }));
@@ -420,6 +421,22 @@
     statsDiv.querySelector('.kpi-value.arrived').innerText = arrived;
     statsDiv.querySelector('.kpi-value.remaining').innerText = total - arrived;
     statsDiv.querySelector('.kpi-value.total').innerText = total;
+  }
+
+  /* 新增：用標題名稱找欄位，名稱找不到才退回固定位置，中間插欄也不會錯位 */
+  function colIndex(name, fallback) {
+    var i = currentHeaders.indexOf(name);
+    return i >= 0 ? i : fallback;
+  }
+  function colGroup() { return colIndex('組別', 6); }     // G 欄
+  function colRoom()  { return colIndex('預排房號', 2); } // C 欄
+  function colPay()   { return colIndex('繳費狀態', 3); } // D 欄
+
+  /* 繳費狀態：不是「已收到」就回傳要亮的紅字，報到台當場攔得住 */
+  function payWarn(v) {
+    var t = String(v[colPay()] || '').trim();
+    if (t.indexOf('已收到') >= 0) return '';
+    return t || '繳費狀態空白';
   }
 
   /* 新增：抽出比對邏輯，讓 query() 與掃碼共用同一套規則 */
@@ -468,7 +485,7 @@
       h += '<div class="result-item">' +
            '  <div class="result-info">' +
            '    <div><span class="result-name">' + v[1] + '</span><span class="result-id-small"> ' + v[0] + '</span></div>' +
-           '    <div class="result-tags">' + (v[2] ? '<span class="tag-item">房: '+v[2]+'</span>' : '') + (v[3] ? '<span class="tag-item">床: '+v[3]+'</span>' : '') + '</div>' +
+           '    <div class="result-tags">' + (v[colGroup()] ? '<span class="tag-item">'+v[colGroup()]+'</span>' : '') + (v[colRoom()] ? '<span class="tag-item">房: '+v[colRoom()]+'</span>' : '') + (payWarn(v) ? '<span class="tag-warn">⚠ '+payWarn(v)+'</span>' : '') + '</div>' +
            '    <div class="' + (isDone?'status-done':'status-undone') + '">' + (isDone?'已報到':'未報到') + '</div>' +
            '  </div>' +
            '  <button class="btn-action" onclick=\'showEdit('+JSON.stringify(item)+')\'>報到</button>' +
@@ -496,7 +513,8 @@
     var h = '<div class="edit-container">';
     h += '<div class="name-title"><div>' + v[1] + '<span style="font-size:15px; color:#999; font-weight:normal;"> ' + v[0] + '</span></div>' +
             '<button onclick="clearUI()" style="background:none; border:none; font-size:24px; color:#ccc;">✕</button></div>';
-    h += '<div class="room-info-strip"><div class="room-item">寢室 <span>'+(v[2]||'-')+'</span></div><div class="room-item">床號 <span>'+(v[3]||'-')+'</span></div></div>';
+    if (payWarn(v)) h += '<div style="margin:-6px 0 12px;"><span class="tag-warn">⚠ '+payWarn(v)+'</span></div>';
+    h += '<div class="room-info-strip"><div class="room-item">組別 <span>'+(v[colGroup()]||'-')+'</span></div><div class="room-item">房號 <span>'+(v[colRoom()]||'-')+'</span></div></div>';
     h += '<div class="action-row-mega" id="mainActionArea">' +
          '  <div id="cw" class="check-box-mega active" onclick="toggleCheck()">' +
          '    <div class="status-icon">✅</div>' +
@@ -506,9 +524,7 @@
          '  <textarea id="noteInp" class="note-input-mega" placeholder="備註...">' + (v[sysIndices.note]||'') + '</textarea>' +
          '</div>';
     h += '<button id="saveBtn" class="btn-save-mega" onclick="save('+item.row+')">確認寫入雲端</button>';
-    h += '<div class="info-grid-small">';
-    for(var i=4; i < currentHeaders.length; i++) { h += '<div class="info-small-item"><b>'+currentHeaders[i]+'</b><br>'+(v[i]||'-')+'</div>'; }
-    h += '</div></div>';
+    h += '</div>';
 
     // 反射動作 2：切換顯示
     document.getElementById('listArea').innerHTML = "";
@@ -538,28 +554,41 @@
 
   function opName() { return document.getElementById('operatorName').value.trim(); }
 
-  function applyLocal(row, check, note, time) {
-    fullDataRows[row-2][sysIndices.check] = check ? "1" : "0";
-    fullDataRows[row-2][sysIndices.note]  = note;
-    fullDataRows[row-2][sysIndices.time]  = time;
+  function applyLocal(row, check, note, op, time) {
+    var r = fullDataRows[row-2];
+    r[sysIndices.check] = check ? "1" : "0";
+    r[sysIndices.note]  = note;
+    if (sysIndices.op != null) r[sysIndices.op] = op;
+    r[sysIndices.time]  = time;
     updateStatsUI();
+  }
+
+  /* 備註預設空白：幹部沒打字就不寫東西。打了才在後面標上是誰改的，
+     幹部名字本身固定寫進「掃碼人」欄，所以這裡只是方便閱讀。
+     同一個人重複存不會疊加成「遲到 (小明) (小明)」。 */
+  function noteWithOp(text, op) {
+    var note = String(text || '').trim();
+    if (!note || !op) return note;
+    var suffix = ' (' + op + ')';
+    if (note.slice(-suffix.length) === suffix) note = note.slice(0, -suffix.length).trim();
+    return note + suffix;
   }
 
   async function save(row) {
     var btn = document.getElementById('saveBtn');
     btn.disabled = true; btn.innerText = "⏳ 寫入中...";
     var isCheck = document.getElementById('isCheck').checked;
-    var note = document.getElementById('noteInp').value;
-    if (opName()) note = note ? (note + ' / ' + opName()) : opName();
+    var op = opName();
+    var note = noteWithOp(document.getElementById('noteInp').value, op);
     try {
-      const res = await callServer('updateData', [row, isCheck, note, 0]);
-      applyLocal(res.row, res.check, res.note, res.time);
+      const res = await callServer('updateData', [row, isCheck, note, op, 0]);
+      applyLocal(res.row, res.check, res.note, res.op, res.time);
       showSuccessPopup(res.check);
     } catch (err) {
       // 新增：寫不出去就先進佇列，畫面照樣放行，背景自動補送
-      pendingQueue.push({ row: row, check: isCheck, note: note, guard: 0 });
+      pendingQueue.push({ row: row, check: isCheck, note: note, op: op, guard: 0 });
       savePending();
-      applyLocal(row, isCheck, note, '(待補送)');
+      applyLocal(row, isCheck, note, op, '(待補送)');
       showSuccessPopup(isCheck, true);
     }
   }
@@ -676,28 +705,34 @@
     var v = item.values;
     if (v[sysIndices.check] == "1") {
       beep(440, 200);
-      flash('dup', '⚠ ' + v[1] + ' 已報到過 ' + (v[sysIndices.time] || ''));
+      var by = (sysIndices.op != null && v[sysIndices.op]) ? '（' + v[sysIndices.op] + '）' : '';
+      flash('dup', '⚠ ' + v[1] + ' 已報到過 ' + (v[sysIndices.time] || '') + by);
       return;
     }
 
-    var note = '掃碼:' + opName();
+    var op = opName();
     var localTime = new Date().toLocaleTimeString('zh-TW', { hour12: false });
 
+    // 備註傳 null → 後端整欄不動，掃碼不會洗掉名單上原本填好的備註
     // 先在本機認定成功，幹部立刻看到結果，不必等雲端回應
-    applyLocal(item.row, true, note, localTime);
-    beep(880, 110);
-    flash('ok', '✓ ' + v[1] + '　' + (v[2] ? '寢' + v[2] : '') + (v[3] ? ' 床' + v[3] : ''));
+    applyLocal(item.row, true, v[sysIndices.note], op, localTime);
+    var where = (v[colGroup()] ? v[colGroup()] : '') + (v[colRoom()] ? '　房' + v[colRoom()] : '');
+
+    // 未繳費的人照樣報到，但用黃底 + 長震動提醒幹部當場攔下來問
+    if (payWarn(v)) {
+      beep(440, 200);
+      flash('dup', '✓ ' + v[1] + '　' + where + '　⚠ ' + payWarn(v));
+    } else {
+      beep(880, 110);
+      flash('ok', '✓ ' + v[1] + '　' + where);
+    }
 
     try {
-      const res = await callServer('updateData', [item.row, true, note, 1], 1);
-      if (res.duplicate) {
-        applyLocal(item.row, true, res.note, res.time);
-        flash('dup', '⚠ ' + v[1] + ' 已由他人報到 ' + res.time);
-      } else {
-        applyLocal(item.row, true, res.note, res.time);
-      }
+      const res = await callServer('updateData', [item.row, true, null, op, 1], 1);
+      applyLocal(item.row, true, res.note, res.op, res.time);
+      if (res.duplicate) flash('dup', '⚠ ' + v[1] + ' 已由 ' + (res.op || '他人') + ' 報到 ' + res.time);
     } catch (err) {
-      pendingQueue.push({ row: item.row, check: true, note: note, guard: 1 });
+      pendingQueue.push({ row: item.row, check: true, note: null, op: op, guard: 1 });
       savePending();
     }
   }
