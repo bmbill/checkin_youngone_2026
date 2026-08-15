@@ -153,9 +153,13 @@
     .scan-opt { display: flex; align-items: center; justify-content: center; gap: 6px;
                 font-size: 13px; color: #888; margin: -4px 0 12px; }
     .scan-opt input { width: 18px; height: 18px; }
+    /* 掃 QR 只需要正方形。16:9 在直立手機上是又寬又扁的長條，
+       QR 擺中間時左右兩側全是用不到的畫面。height:auto 一定要蓋掉 ——
+       html5-qrcode 會自己塞 inline height，蓋不掉的話 aspect-ratio 不會生效。 */
     #reader { width: 100%; display: none; margin-bottom: 15px; border-radius: 12px;
-              overflow: hidden; border: 2px solid var(--m-sage); }
-    #reader video { width: 100% !important; display: block; }
+              overflow: hidden; border: 2px solid var(--m-sage);
+              aspect-ratio: 1 / 1; height: auto !important; background: #000; }
+    #reader video { width: 100% !important; height: 100% !important; display: block; object-fit: cover; }
     .scan-flash { position: fixed; left: 0; right: 0; top: 0; z-index: 900; padding: 14px;
                   text-align: center; font-size: 20px; font-weight: bold; color: #fff; display: none; }
     #gateOverlay { position: fixed; top:0; left:0; width:100%; height:100%; background: var(--m-sand);
@@ -932,17 +936,19 @@
       await html5QrCode.start(
         { facingMode: "environment" },
         {
-          fps: 10,
+          /* 正方形畫面的像素量比 1080p 少四成，所以 fps 拉回 15 */
+          fps: 15,
           /* 刻意不設 qrbox。設了的話 html5-qrcode 會把該區域縮到
              「畫面上的顯示尺寸」再解碼 —— 手機上大概只有 300px，
-             相機拍的 1080p 等於白拍。不設就用整張原生畫面去解，
-             QR 在畫面中間小小的也還有足夠像素。 */
-          /* 預設常常只拿到 640×480，QR 稍遠或稍小就解不出來。
-             focusMode 放在 advanced 裡是刻意的：不支援的手機會忽略它，
-             寫在外層則會直接 OverconstrainedError 開不了相機。 */
+             相機拍的 1080p 等於白拍。不設就用整張原生畫面去解。
+             搭配下面的正方形畫面，解碼區域就跟看到的一模一樣。 */
           videoConstraints: {
             facingMode: 'environment',
-            width:  { ideal: 1920 },
+            /* aspectRatio 用 ideal 不用固定值：不支援的相機會退回 16:9
+               開得起來，寫死的話會 OverconstrainedError 直接開不了。
+               CSS 那邊還有 object-fit:cover 保底，畫面一定是正方形。 */
+            aspectRatio: { ideal: 1 },
+            width:  { ideal: 1080 },
             height: { ideal: 1080 },
             advanced: [{ focusMode: 'continuous' }]
           }
