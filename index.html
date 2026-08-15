@@ -237,12 +237,6 @@
   <div id="reader"></div>
   <div id="scanInfo" class="scan-info" style="display:none;"></div>
 
-  <!-- 即時掃描讀不到時的第二條路：用手機原生相機拍一張高解析度靜態照來辨識 -->
-  <button class="btn-camera" style="background:var(--m-blue);"
-          onclick="document.getElementById('snapFile').click()">🖼️ 拍照辨識（掃不到時用）</button>
-  <input type="file" accept="image/*" capture="environment" id="snapFile"
-         style="display:none" onchange="scanFromPhoto(this)">
-
   <div class="search-group">
     <div class="search-input-wrapper">
       <input type="text" id="keyword" class="search-input" placeholder="搜尋編號、姓名、房號" onkeypress="if(event.keyCode==13) query()">
@@ -263,7 +257,7 @@
 
   /* 版本號直接印在畫面右上角。GitHub Pages 會被手機快取十幾分鐘，
      沒有這個就永遠在猜「手機上到底是不是新版」—— 改版時記得一起改。 */
-  const APP_VERSION = 'v8';
+  const APP_VERSION = 'v9';
 
   // 通行碼「不」寫在這裡：本檔會公開在網路上，寫死等於把鑰匙貼在門口。
   // 改由幹部第一次開啟時輸入一次，存在他自己手機裡。
@@ -1033,27 +1027,6 @@
     el.innerText = (s.width || '?') + '×' + (s.height || '?') + '　' +
                    (('BarcodeDetector' in window) ? '原生解碼' : 'JS 解碼');
     el.style.display = 'block';
-  }
-
-  /* 拍照辨識：即時掃描讀的是 1080p 的video 影格，手機原生相機拍的靜態照
-     是一千多萬像素、對焦準、又沒有動態模糊，斜的、小的都好解得多。
-     iOS 沒有原生 QR 解碼器、只能用 JS 解碼，這條路的差距特別明顯。 */
-  async function scanFromPhoto(input) {
-    var f = input.files && input.files[0];
-    input.value = '';
-    if (!f) return;
-
-    if (html5QrCode && html5QrCode.isScanning) await toggleScanner();   // 相機開著就先關掉
-    html5QrCode = html5QrCode || newScanner();
-
-    flash('dup', '辨識中...');
-    try {
-      var txt = await html5QrCode.scanFile(f, false);
-      onScanned(txt);
-    } catch (e) {
-      beep(300, 250);
-      flash('err', '這張照片認不出 QR，靠近一點重拍，或直接用下面搜尋');
-    }
   }
 
   function onScanned(txt) {
