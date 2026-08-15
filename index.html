@@ -163,6 +163,7 @@
                    box-sizing: border-box; }
     .gate-card { background:#fff; width:100%; max-width:340px; padding:28px 22px; border-radius:20px;
                  text-align:center; box-shadow: 0 5px 20px rgba(0,0,0,.08); }
+    .scan-info { font-size: 11px; color: #bbb; text-align: center; margin: -6px 0 12px; }
     .scan-flash.ok { background: var(--success); }
     .scan-flash.dup { background: #b8860b; }
     .scan-flash.err { background: var(--danger); }
@@ -226,8 +227,7 @@
     <label for="autoMode">掃到就直接報到（連續掃描，不用按確認）</label>
   </div>
   <div id="reader"></div>
-  <button class="btn-camera" id="torchBtn" style="display:none; background:var(--m-coffee);"
-          onclick="toggleTorch()">🔦 開啟手電筒</button>
+  <div id="scanInfo" class="scan-info" style="display:none;"></div>
 
   <div class="search-group">
     <div class="search-input-wrapper">
@@ -905,7 +905,7 @@
     if (html5QrCode && html5QrCode.isScanning) {
       await html5QrCode.stop();
       r.style.display = 'none'; sBtn.innerText = '📷 開啟相機掃描';
-      document.getElementById('torchBtn').style.display = 'none';
+      document.getElementById('scanInfo').style.display = 'none';
       forceReflow();
       return;
     }
@@ -930,13 +930,11 @@
       await html5QrCode.start(
         { facingMode: "environment" },
         {
-          fps: 15,                       // 原本 10，每秒多試 5 次
-          /* 原本寫死 qrbox:250 —— 畫面正中央只有 250×250 像素在解碼，
-             框外一律不看，所以才要「對得很正」。改成隨畫面縮放的 80%。 */
-          qrbox: function (vw, vh) {
-            var m = Math.floor(Math.min(vw, vh) * 0.8);
-            return { width: m, height: m };
-          },
+          fps: 10,
+          /* 刻意不設 qrbox。設了的話 html5-qrcode 會把該區域縮到
+             「畫面上的顯示尺寸」再解碼 —— 手機上大概只有 300px，
+             相機拍的 1080p 等於白拍。不設就用整張原生畫面去解，
+             QR 在畫面中間小小的也還有足夠像素。 */
           /* 預設常常只拿到 640×480，QR 稍遠或稍小就解不出來。
              focusMode 放在 advanced 裡是刻意的：不支援的手機會忽略它，
              寫在外層則會直接 OverconstrainedError 開不了相機。 */
@@ -950,7 +948,7 @@
         onScanned
       );
       beep(660, 80);
-      setupTorch();
+      showScanInfo();
     } catch (err) {
       r.style.display = 'none'; sBtn.innerText = '📷 開啟相機掃描';
       alert('無法開啟相機：' + (err && err.message ? err.message : err) +
@@ -958,25 +956,15 @@
     }
   }
 
-  /* 手電筒：晚上報到台光線不足是掃不到的常見原因，
-     但不是每支手機都支援，所以先問相機能力，支援才把按鈕顯示出來。 */
-  function setupTorch() {
-    var btn = document.getElementById('torchBtn'), caps = null;
-    try { caps = html5QrCode.getRunningTrackCapabilities(); } catch (e) {}
-    btn.style.display = (caps && caps.torch) ? 'block' : 'none';
-    btn.dataset.on = '';
-    btn.innerText = '🔦 開啟手電筒';
-  }
-
-  async function toggleTorch() {
-    var btn = document.getElementById('torchBtn'), on = (btn.dataset.on !== '1');
-    try {
-      await html5QrCode.applyVideoConstraints({ advanced: [{ torch: on }] });
-      btn.dataset.on = on ? '1' : '';
-      btn.innerText = on ? '🔦 關閉手電筒' : '🔦 開啟手電筒';
-    } catch (e) {
-      btn.style.display = 'none';
-    }
+  /* 掃描診斷：顯示相機實際給的解析度、以及有沒有用到原生解碼器。
+     掃不到的時候這一行會直接告訴我們是哪一環出問題 —— 如果顯示
+     640×480，就是 videoConstraints 沒被採納，不是對焦或距離的問題。 */
+  function showScanInfo() {
+    var el = document.getElementById('scanInfo'), s = {};
+    try { s = html5QrCode.getRunningTrackSettings() || {}; } catch (e) {}
+    el.innerText = (s.width || '?') + '×' + (s.height || '?') + '　' +
+                   (('BarcodeDetector' in window) ? '原生解碼' : 'JS 解碼');
+    el.style.display = 'block';
   }
 
   function onScanned(txt) {
@@ -993,6 +981,7 @@
       if (html5QrCode && html5QrCode.isScanning) {
         html5QrCode.stop().then(function () {
           document.getElementById('reader').style.display = 'none';
+          document.getElementById('scanInfo').style.display = 'none';
           document.getElementById('scanBtn').innerText = '📷 開啟相機掃描';
           forceReflow();
         });
