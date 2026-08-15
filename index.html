@@ -864,7 +864,9 @@
     document.getElementById('editArea').style.display = "none";
     document.getElementById('keyword').value = "";
     currentEditRowData = null;
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    // window.scrollTo 在這個版面是無效的（html 設了 overflow:hidden，body 才是捲動容器）
+    if (document.body.scrollTo) document.body.scrollTo({ top: 0, behavior: 'smooth' });
+    else document.body.scrollTop = 0;
 
     // 反射動作 3：延遲 50ms 喚醒滾動軸（掃描中不搶走游標）
     setTimeout(() => {
@@ -949,11 +951,39 @@
       );
       beep(660, 80);
       showScanInfo();
+      scrollReaderIntoView();
     } catch (err) {
       r.style.display = 'none'; sBtn.innerText = '📷 開啟相機掃描';
       alert('無法開啟相機：' + (err && err.message ? err.message : err) +
             '\n\n請確認：\n1. 用 Safari 或 Chrome 開啟（不要用 LINE 內建瀏覽器）\n2. 網址是 https\n3. 已允許相機權限');
     }
+  }
+
+  /* 相機畫面排在儀表板和搜尋列底下，手機上開起來常常只露出一半。
+     start() 回來的當下 video 還沒拿到尺寸、#reader 高度是 0，
+     這時候捲是白捲的 —— 所以等它真的有高度再捲，最多等兩秒。
+     捲的是 body：html 設了 overflow:hidden，body 才是實際的捲動容器。 */
+  function scrollReaderIntoView(tries) {
+    tries = tries || 0;
+    var r = document.getElementById('reader');
+    if (r.offsetHeight < 80 && tries < 20) {
+      setTimeout(function () { scrollReaderIntoView(tries + 1); }, 100);
+      return;
+    }
+    try {
+      r.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    } catch (e) {
+      r.scrollIntoView();
+    }
+    /* 保險：舊 Android 的 scrollIntoView 有時不理 block:'center'。
+       注意這裡只能設 body.scrollTop —— 這個版面 html 是 overflow:hidden，
+       window.scrollTo 和 documentElement.scrollTop 都完全沒作用（實測）。 */
+    setTimeout(function () {
+      var b = r.getBoundingClientRect();
+      if (b.bottom > window.innerHeight || b.top < 0) {
+        document.body.scrollTop += b.top - Math.max(0, (window.innerHeight - r.offsetHeight) / 2);
+      }
+    }, 500);
   }
 
   /* 掃描診斷：顯示相機實際給的解析度、以及有沒有用到原生解碼器。
