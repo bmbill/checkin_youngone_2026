@@ -93,6 +93,9 @@
     .result-tags { display: flex; gap: 4px; margin: 4px 0; }
     .tag-item { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: #fdfaf8; border: 1px solid var(--m-coffee); color: var(--m-coffee); font-weight: bold; }
     .tag-warn { font-size: 12px; padding: 2px 8px; border-radius: 4px; background: #fdecea; border: 1px solid var(--danger); color: var(--danger); font-weight: bold; }
+    .note-log { background: #f8f8f8; border: 1px solid #f0f0f0; border-radius: 8px; padding: 10px 12px;
+                font-size: 12px; color: #888; line-height: 1.8; margin: -6px 0 15px; }
+
     /* 行李照片 */
     .photo-row { display: flex; gap: 10px; margin-bottom: 20px; }
     .photo-slot { flex: 1; border: 2px dashed var(--m-border); border-radius: 12px; background: #fafafa;
@@ -223,6 +226,8 @@
     <label for="autoMode">掃到就直接報到（連續掃描，不用按確認）</label>
   </div>
   <div id="reader"></div>
+  <button class="btn-camera" id="torchBtn" style="display:none; background:var(--m-coffee);"
+          onclick="toggleTorch()">🔦 開啟手電筒</button>
 
   <div class="search-group">
     <div class="search-input-wrapper">
@@ -266,7 +271,7 @@
   const ARG_MAP = {
     getAllData:      [],
     getDeltaUpdates: ['lastSyncTime', 'localTotalRows'],
-    updateData:      ['row', 'check', 'note', 'op', 'guard']
+    updateData:      ['row', 'check', 'note', 'op', 'guard', 'at']
   };
   var jsonpSeq = 0;
 
@@ -332,7 +337,7 @@
     while (pendingQueue.length) {
       const job = pendingQueue[0];
       try {
-        await callServer('updateData', [job.row, job.check, job.note, job.op, job.guard], 1);
+        await callServer('updateData', [job.row, job.check, job.note, job.op, job.guard, job.at], 1);
         pendingQueue.shift();
         savePending();
       } catch (e) { break; }   // 還是不通就留著，下一輪再試
@@ -442,6 +447,12 @@
   }
 
   /* 新增：用標題名稱找欄位，名稱找不到才退回固定位置，中間插欄也不會錯位 */
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+
   function colIndex(name, fallback) {
     var i = currentHeaders.indexOf(name);
     return i >= 0 ? i : fallback;
@@ -568,8 +579,11 @@
          '    <div class="status-text">已報到</div>' +
          '    <input type="checkbox" id="isCheck" style="display:none" checked>' +
          '  </div>' +
-         '  <textarea id="noteInp" class="note-input-mega" placeholder="備註...">' + (v[sysIndices.note]||'') + '</textarea>' +
+         '  <textarea id="noteInp" class="note-input-mega" placeholder="新增備註..."></textarea>' +
          '</div>';
+    // 既有紀錄唯讀顯示，不放進輸入框 —— 放進去幹部一不小心就會把整串紀錄改掉或刪掉
+    var log = String(v[sysIndices.note] || '').trim();
+    if (log) h += '<div class="note-log">' + esc(log).split(' / ').join('<br>') + '</div>';
     h += '<button id="saveBtn" class="btn-save-mega" onclick="save('+item.row+')">學員狀態更新</button>';
     h += photoSlotsHtml(item);
     h += '</div>';
@@ -668,25 +682,43 @@
     shrinkImage(file).then(function (dataUrl) {
       document.querySelector('#slot_' + key + ' .photo-body').innerHTML = '<img src="' + dataUrl + '" alt="">';
       document.getElementById('slot_' + key).className = 'photo-slot filled';
-      sendPhoto(key, row, photoCol(key).header, dataUrl);       // 先顯示本機預覽，再上傳
+      sendPhoto(key, row, dataUrl);       // 先顯示本機預覽，再上傳
     }).catch(function (e) {
       st.className = 'photo-state err'; st.innerText = e.message || '照片讀取失敗';
     });
   }
 
-  async function sendPhoto(key, row, header, dataUrl) {
+  /* 把備註紀錄重畫一次。照片上傳成功後備註會多一筆「拍攝寄放行李」，
+     但不能整個面板重畫 —— 那會清掉還沒送出的備註文字和另一格的照片預覽。 */
+  function renderNoteLog(row) {
+    if (!currentEditRowData || currentEditRowData.row !== row) return;
+    var log = String(fullDataRows[row - 2][sysIndices.note] || '').trim();
+    var el  = document.querySelector('#editArea .note-log');
+    if (!log) { if (el) el.remove(); return; }
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'note-log';
+      var anchor = document.getElementById('mainActionArea');
+      anchor.parentNode.insertBefore(el, anchor.nextSibling);
+    }
+    el.innerHTML = esc(log).split(' / ').join('<br>');
+  }
+
+  async function sendPhoto(key, row, dataUrl) {
+    var header = photoCol(key).header, label = photoCol(key).label;
     /* 上傳期間幹部可能已經切到別人身上了，那就只更新資料、不要去動畫面，
        否則狀態會寫到別人的格子上。 */
     function st() {
       return (currentEditRowData && currentEditRowData.row === row) ? photoState(key) : null;
     }
-    photoRetry[key] = { row: row, header: header, dataUrl: dataUrl };
+    photoRetry[key] = { row: row, dataUrl: dataUrl };
     var el = st();
     if (el) { el.className = 'photo-state'; el.innerText = '上傳中...'; }
     try {
-      var res = await uploadPhoto(row, header, dataUrl);
+      var res = await uploadPhoto(row, header, label, dataUrl);
       var idx = photoIndex(header);
       if (idx >= 0) fullDataRows[row - 2][idx] = res.url;
+      if (res.note != null) { fullDataRows[row - 2][sysIndices.note] = res.note; renderNoteLog(row); }
       delete photoRetry[key];
       el = st();
       if (el) {
@@ -705,17 +737,17 @@
 
   function retryPhoto(key) {
     var p = photoRetry[key];
-    if (p) sendPhoto(key, p.row, p.header, p.dataUrl);
+    if (p) sendPhoto(key, p.row, p.dataUrl);
   }
 
   /* 照片一定得走 POST：JSONP 是把資料塞進網址，幾千字元就爆了，照片是幾十萬。
      Content-Type 用 text/plain 是刻意的 —— 這樣才算 simple request，
      不會觸發 CORS preflight。Apps Script 不回應 OPTIONS，一 preflight 就整個掛掉。 */
-  async function uploadPhoto(row, header, dataUrl, retries) {
+  async function uploadPhoto(row, header, label, dataUrl, retries) {
     retries = (retries === undefined) ? 2 : retries;
     var body = JSON.stringify({
-      token: TOKEN, action: 'uploadPhoto', row: row, header: header,
-      op: opName(), mime: 'image/jpeg', data: dataUrl.split(',')[1]
+      token: TOKEN, action: 'uploadPhoto', row: row, header: header, label: label,
+      op: opName(), at: hhmm(), mime: 'image/jpeg', data: dataUrl.split(',')[1]
     });
     var lastErr;
     for (var i = 0; i <= retries; i++) {
@@ -756,15 +788,23 @@
     updateStatsUI();
   }
 
-  /* 備註預設空白：幹部沒打字就不寫東西。打了才在後面標上是誰改的，
-     幹部名字本身固定寫進「掃碼人」欄，所以這裡只是方便閱讀。
-     同一個人重複存不會疊加成「遲到 (小明) (小明)」。 */
-  function noteWithOp(text, op) {
-    var note = String(text || '').trim();
-    if (!note || !op) return note;
-    var suffix = ' (' + op + ')';
-    if (note.slice(-suffix.length) === suffix) note = note.slice(0, -suffix.length).trim();
-    return note + suffix;
+  /* 操作當下的時間。之所以由前端帶過去，是為了離線補送：
+     訊號回來才送出的那筆，時間要記「當初操作的時間」而不是補送成功的時間。 */
+  function hhmm() {
+    var d = new Date();
+    return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+  }
+
+  /* 備註欄是一串活動紀錄：「夏安(義工) 19:20 報到」。
+     真正的串接在後端做，這兩支只是本機先畫出來給幹部看，
+     等伺服器回應再用它回傳的內容覆蓋。 */
+  function logLine(op, at, what) { return (op || '?') + '(義工) ' + at + ' ' + what; }
+
+  function appendLog(existing, entries) {
+    var base = String(existing || '').trim();
+    entries = (entries || []).filter(Boolean);
+    if (!entries.length) return base;
+    return base ? base + ' / ' + entries.join(' / ') : entries.join(' / ');
   }
 
   async function save(row) {
@@ -772,16 +812,23 @@
     btn.disabled = true; btn.innerText = "⏳ 更新中...";
     var isCheck = document.getElementById('isCheck').checked;
     var op = opName();
-    var note = noteWithOp(document.getElementById('noteInp').value, op);
+    var at = hhmm();
+    // 送出的是「這次新增的備註」，不是整格內容 —— 串接交給後端，
+    // 兩個幹部同時操作同一個人才不會互相蓋掉紀錄
+    var note = document.getElementById('noteInp').value.trim();
     try {
-      const res = await callServer('updateData', [row, isCheck, note, op, 0]);
+      const res = await callServer('updateData', [row, isCheck, note, op, 0, at]);
       applyLocal(res.row, res.check, res.note, res.op, res.time);
       showSuccessPopup(res.check);
     } catch (err) {
       // 新增：寫不出去就先進佇列，畫面照樣放行，背景自動補送
-      pendingQueue.push({ row: row, check: isCheck, note: note, op: op, guard: 0 });
+      pendingQueue.push({ row: row, check: isCheck, note: note, op: op, guard: 0, at: at });
       savePending();
-      applyLocal(row, isCheck, note, op, '(待補送)');
+      var prev = fullDataRows[row - 2];
+      applyLocal(row, isCheck, appendLog(prev[sysIndices.note], [
+        (isCheck !== (prev[sysIndices.check] == '1')) ? logLine(op, at, isCheck ? '報到' : '取消報到') : '',
+        note ? logLine(op, at, '備註：' + note) : ''
+      ]), op, '(待補送)');
       showSuccessPopup(isCheck, true);
     }
   }
@@ -850,7 +897,9 @@
 
     if (html5QrCode && html5QrCode.isScanning) {
       await html5QrCode.stop();
-      r.style.display = 'none'; sBtn.innerText = '📷 開啟相機掃描'; forceReflow();
+      r.style.display = 'none'; sBtn.innerText = '📷 開啟相機掃描';
+      document.getElementById('torchBtn').style.display = 'none';
+      forceReflow();
       return;
     }
 
@@ -858,18 +907,68 @@
     localStorage.setItem('ck_op', opName());
 
     r.style.display = 'block'; sBtn.innerText = '❌ 關閉相機';
-    html5QrCode = html5QrCode || new Html5Qrcode("reader");
+
+    /* 建構子這兩個設定是靈敏度的關鍵：
+       - formatsToSupport 只留 QR：不必再逐一試 Code128、EAN 等十幾種條碼格式
+       - useBarCodeDetectorIfSupported：能用瀏覽器原生解碼器就用，
+         比套件內建的 JS 解碼快很多，對角度、模糊、反光的容忍度也高得多 */
+    html5QrCode = html5QrCode || new Html5Qrcode("reader", {
+      verbose: false,
+      formatsToSupport: (typeof Html5QrcodeSupportedFormats !== 'undefined')
+        ? [Html5QrcodeSupportedFormats.QR_CODE] : undefined,
+      experimentalFeatures: { useBarCodeDetectorIfSupported: true }
+    });
+
     try {
       await html5QrCode.start(
         { facingMode: "environment" },
-        { fps: 10, qrbox: 250 },
+        {
+          fps: 15,                       // 原本 10，每秒多試 5 次
+          /* 原本寫死 qrbox:250 —— 畫面正中央只有 250×250 像素在解碼，
+             框外一律不看，所以才要「對得很正」。改成隨畫面縮放的 80%。 */
+          qrbox: function (vw, vh) {
+            var m = Math.floor(Math.min(vw, vh) * 0.8);
+            return { width: m, height: m };
+          },
+          /* 預設常常只拿到 640×480，QR 稍遠或稍小就解不出來。
+             focusMode 放在 advanced 裡是刻意的：不支援的手機會忽略它，
+             寫在外層則會直接 OverconstrainedError 開不了相機。 */
+          videoConstraints: {
+            facingMode: 'environment',
+            width:  { ideal: 1920 },
+            height: { ideal: 1080 },
+            advanced: [{ focusMode: 'continuous' }]
+          }
+        },
         onScanned
       );
       beep(660, 80);
+      setupTorch();
     } catch (err) {
       r.style.display = 'none'; sBtn.innerText = '📷 開啟相機掃描';
       alert('無法開啟相機：' + (err && err.message ? err.message : err) +
             '\n\n請確認：\n1. 用 Safari 或 Chrome 開啟（不要用 LINE 內建瀏覽器）\n2. 網址是 https\n3. 已允許相機權限');
+    }
+  }
+
+  /* 手電筒：晚上報到台光線不足是掃不到的常見原因，
+     但不是每支手機都支援，所以先問相機能力，支援才把按鈕顯示出來。 */
+  function setupTorch() {
+    var btn = document.getElementById('torchBtn'), caps = null;
+    try { caps = html5QrCode.getRunningTrackCapabilities(); } catch (e) {}
+    btn.style.display = (caps && caps.torch) ? 'block' : 'none';
+    btn.dataset.on = '';
+    btn.innerText = '🔦 開啟手電筒';
+  }
+
+  async function toggleTorch() {
+    var btn = document.getElementById('torchBtn'), on = (btn.dataset.on !== '1');
+    try {
+      await html5QrCode.applyVideoConstraints({ advanced: [{ torch: on }] });
+      btn.dataset.on = on ? '1' : '';
+      btn.innerText = on ? '🔦 關閉手電筒' : '🔦 開啟手電筒';
+    } catch (e) {
+      btn.style.display = 'none';
     }
   }
 
@@ -909,11 +1008,12 @@
     }
 
     var op = opName();
+    var at = hhmm();
     var localTime = new Date().toLocaleTimeString('zh-TW', { hour12: false });
 
-    // 備註傳 null → 後端整欄不動，掃碼不會洗掉名單上原本填好的備註
+    // 備註傳 null → 後端不會覆寫既有內容，只會在後面接上一筆「報到」紀錄
     // 先在本機認定成功，幹部立刻看到結果，不必等雲端回應
-    applyLocal(item.row, true, v[sysIndices.note], op, localTime);
+    applyLocal(item.row, true, appendLog(v[sysIndices.note], [logLine(op, at, '報到')]), op, localTime);
     var where = (v[colGroup()] ? v[colGroup()] : '') + (v[colRoom()] ? '　房' + v[colRoom()] : '');
 
     // 未繳費的人照樣報到，但用黃底 + 長震動提醒幹部當場攔下來問
@@ -926,11 +1026,11 @@
     }
 
     try {
-      const res = await callServer('updateData', [item.row, true, null, op, 1], 1);
+      const res = await callServer('updateData', [item.row, true, null, op, 1, at], 1);
       applyLocal(item.row, true, res.note, res.op, res.time);
       if (res.duplicate) flash('dup', '⚠ ' + v[1] + ' 已由 ' + (res.op || '他人') + ' 報到 ' + res.time);
     } catch (err) {
-      pendingQueue.push({ row: item.row, check: true, note: null, op: op, guard: 1 });
+      pendingQueue.push({ row: item.row, check: true, note: null, op: op, guard: 1, at: at });
       savePending();
     }
   }

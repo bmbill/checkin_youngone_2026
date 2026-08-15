@@ -40,6 +40,29 @@ function sysIdx_(headers) {
   return idx;
 }
 
+/* ══════════ 備註 = 活動紀錄 ══════════
+   備註欄不是一格自由文字，是一串「誰、幾點、做了什麼」：
+     夏安(義工) 19:20 報到 / 小明(義工) 19:33 拍攝寄放行李
+   一律用 append，絕不整格覆寫 —— 兩個幹部同時操作同一個學員時，
+   若前端送整串內容回來，後寫的那筆會把前面的紀錄整段吃掉。 */
+
+function logLine_(op, at, what) {
+  return (op || '?') + '(義工) ' + at + ' ' + what;
+}
+
+function appendLog_(existing, entries) {
+  var base = String(existing || '').trim();
+  entries = (entries || []).filter(function (x) { return x; });
+  if (!entries.length) return base;
+  return base ? base + ' / ' + entries.join(' / ') : entries.join(' / ');
+}
+
+/* 時間優先用前端帶來的（離線補送時才記得住當初操作的時間），格式不對才用現在時間 */
+function atOrNow_(at) {
+  return /^\d{2}:\d{2}$/.test(String(at || '')) ? String(at)
+       : Utilities.formatDate(new Date(), 'GMT+8', 'HH:mm');
+}
+
 /**
  * 時間戳記是用 GMT+8 格式化寫進去的字串（2026/08/15 19:18:00）。
  * 原本的 new Date(字串) 會用「Apps Script 專案時區」去解讀它，
@@ -136,9 +159,27 @@ function uploadPhoto_(p) {
   // 公式的顯示值是圖片本身、拿不到網址，重新整理後就找不到照片了。
   // 想在 Sheet 上直接看縮圖，另開一欄放 =IMAGE(Q2) 就好。
   var url = 'https://lh3.googleusercontent.com/d/' + file.getId();
-  sheet.getRange(row, col + 1).setValue(url);
 
-  return { success: true, url: url, fileId: file.getId(), time: now, shared: shared };
+  /* Drive 上傳很慢（幾秒），鎖只包住試算表這幾行寫入，
+     不要讓一支手機傳照片就把整個報到台卡住。 */
+  var newNote = null;
+  var lock = LockService.getScriptLock();
+  lock.tryLock(25000);
+  try {
+    sheet.getRange(row, col + 1).setValue(url);
+
+    var noteCol = headers.lastIndexOf('備註');
+    if (noteCol >= 0) {
+      var cell = sheet.getRange(row, noteCol + 1);
+      newNote = appendLog_(cell.getDisplayValue(),
+                           [logLine_(p.op, atOrNow_(p.at), '拍攝' + (p.label || p.header))]);
+      cell.setValue(newNote);
+    }
+  } finally {
+    lock.releaseLock();
+  }
+
+  return { success: true, url: url, fileId: file.getId(), time: now, shared: shared, note: newNote };
 }
 
 
@@ -224,26 +265,36 @@ function apiUpdate_(p) {
     }
 
     var now = Utilities.formatDate(new Date(), 'GMT+8', 'yyyy/MM/dd HH:mm:ss');
+    var at  = atOrNow_(p.at);
+
+    /* 只在狀態真的改變時才記一筆，否則幹部多按幾次「學員狀態更新」
+       就會塞出一整排一模一樣的「報到」。 */
+    var wasCheck = String(cur[idx.check - lo]) === '1';
+    var newNote  = appendLog_(cur[idx.note - lo], [
+      (isCheck && !wasCheck) ? logLine_(op, at, '報到') : '',
+      (!isCheck && wasCheck) ? logLine_(op, at, '取消報到') : '',
+      (hasNote && note)      ? logLine_(op, at, '備註：' + note) : ''
+    ]);
 
     if (hi - lo + 1 === 4) {
       // 四欄相連（目前是 M~P），一次寫入最快
       var out = cur.slice();
       out[idx.check - lo] = isCheck ? '1' : '0';
+      out[idx.note  - lo] = newNote;
       out[idx.op    - lo] = op;
       out[idx.time  - lo] = now;
-      if (hasNote) out[idx.note - lo] = note;
       rng.setValues([out]);
     } else {
       // 中間夾了別的欄位 → 逐格寫，免得把人家的公式蓋成純文字
       sheet.getRange(row, idx.check + 1).setValue(isCheck ? '1' : '0');
+      sheet.getRange(row, idx.note  + 1).setValue(newNote);
       sheet.getRange(row, idx.op    + 1).setValue(op);
       sheet.getRange(row, idx.time  + 1).setValue(now);
-      if (hasNote) sheet.getRange(row, idx.note + 1).setValue(note);
     }
 
     return {
       success: true, duplicate: false, row: row, check: isCheck,
-      note: hasNote ? note : cur[idx.note - lo], op: op, time: now, name: name
+      note: newNote, op: op, time: now, name: name
     };
 
   } finally {
