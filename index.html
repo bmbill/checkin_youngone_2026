@@ -583,7 +583,7 @@
          '</div>';
     // 既有紀錄唯讀顯示，不放進輸入框 —— 放進去幹部一不小心就會把整串紀錄改掉或刪掉
     var log = String(v[sysIndices.note] || '').trim();
-    if (log) h += '<div class="note-log">' + esc(log).split(' / ').join('<br>') + '</div>';
+    if (log) h += '<div class="note-log">' + logHtml(log) + '</div>';
     h += '<button id="saveBtn" class="btn-save-mega" onclick="save('+item.row+')">學員狀態更新</button>';
     h += photoSlotsHtml(item);
     h += '</div>';
@@ -701,7 +701,7 @@
       var anchor = document.getElementById('mainActionArea');
       anchor.parentNode.insertBefore(el, anchor.nextSibling);
     }
-    el.innerHTML = esc(log).split(' / ').join('<br>');
+    el.innerHTML = logHtml(log);
   }
 
   async function sendPhoto(key, row, dataUrl) {
@@ -795,16 +795,23 @@
     return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
   }
 
-  /* 備註欄是一串活動紀錄：「夏安(義工) 19:20 報到」。
-     真正的串接在後端做，這兩支只是本機先畫出來給幹部看，
+  /* 備註欄是一串活動紀錄，一筆一行：「夏安(義工) 19:20 報到」。
+     真正的串接在後端做，這幾支只是本機先畫出來給幹部看，
      等伺服器回應再用它回傳的內容覆蓋。 */
+  var LOG_SEP = '\n';
+
   function logLine(op, at, what) { return (op || '?') + '(義工) ' + at + ' ' + what; }
 
   function appendLog(existing, entries) {
     var base = String(existing || '').trim();
     entries = (entries || []).filter(Boolean);
     if (!entries.length) return base;
-    return base ? base + ' / ' + entries.join(' / ') : entries.join(' / ');
+    return base ? base + LOG_SEP + entries.join(LOG_SEP) : entries.join(LOG_SEP);
+  }
+
+  /* 分行時也吃舊的「 / 」，換格式之前存進去的紀錄才不會擠成一行 */
+  function logHtml(text) {
+    return esc(String(text || '').trim()).split(/\r?\n| \/ /).join('<br>');
   }
 
   async function save(row) {

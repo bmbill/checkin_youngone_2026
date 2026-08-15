@@ -41,10 +41,13 @@ function sysIdx_(headers) {
 }
 
 /* ══════════ 備註 = 活動紀錄 ══════════
-   備註欄不是一格自由文字，是一串「誰、幾點、做了什麼」：
-     夏安(義工) 19:20 報到 / 小明(義工) 19:33 拍攝寄放行李
+   備註欄不是一格自由文字，是一串「誰、幾點、做了什麼」，一筆一行：
+     夏安(義工) 19:20 報到
+     小明(義工) 19:33 拍攝寄放行李
    一律用 append，絕不整格覆寫 —— 兩個幹部同時操作同一個學員時，
    若前端送整串內容回來，後寫的那筆會把前面的紀錄整段吃掉。 */
+
+const LOG_SEP = '\n';
 
 function logLine_(op, at, what) {
   return (op || '?') + '(義工) ' + at + ' ' + what;
@@ -54,7 +57,7 @@ function appendLog_(existing, entries) {
   var base = String(existing || '').trim();
   entries = (entries || []).filter(function (x) { return x; });
   if (!entries.length) return base;
-  return base ? base + ' / ' + entries.join(' / ') : entries.join(' / ');
+  return base ? base + LOG_SEP + entries.join(LOG_SEP) : entries.join(LOG_SEP);
 }
 
 /* 時間優先用前端帶來的（離線補送時才記得住當初操作的時間），格式不對才用現在時間 */
@@ -309,12 +312,20 @@ function getAllData() {
   var sheet = SpreadsheetApp.getActive().getSheetByName(CONFIG.SOURCE_SHEET);
   var data = sheet.getDataRange().getDisplayValues();
   var headers = data[0];
+  var idx = sysIdx_(headers);
+
+  // 備註是多行紀錄，沒開自動換行的話在 Sheet 上只看得到第一行。
+  // 放在這裡而不是每次寫入時做 —— 這支一個幹部開一次 app 才跑一次，不影響掃碼速度。
+  try {
+    sheet.getRange(2, idx.note + 1, Math.max(sheet.getMaxRows() - 1, 1), 1).setWrap(true);
+  } catch (e) {}
+
   return {
     headers: headers,
     rows: data.slice(1),
     serverTime: new Date().getTime(),
     totalRows: data.length,
-    sysIndices: sysIdx_(headers)
+    sysIndices: idx
   };
 }
 
