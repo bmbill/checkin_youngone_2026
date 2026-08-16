@@ -14,8 +14,34 @@
 
 const API_CONFIG = {
   // ★★ 改成只有你們幹部知道的字串，要和 index.html 裡輸入的通行碼一模一樣 ★★
-  TOKEN: ''
+  TOKEN: '',
+
+  // ★★ 關懷員的通行碼（care.html 用），和上面那組不可以一樣 ★★
+  // 留空 = 關懷員頁面停用。通行碼一律只寫在這裡，不寫進 HTML —— 那些檔案是公開的。
+  CARE_TOKEN: ''
 };
+
+/* 關懷員備註欄（S）。刻意不放進下面的 COL_NAMES：
+   COL_NAMES 少一欄會讓 sysIdx_ 直接丟錯，等於整個報到系統停擺。
+   關懷員備註是後來加的，名單上還沒加這一欄的時候，
+   報到台必須照常運作，所以這一欄只在真的要寫的時候才去找。 */
+const CARE_COL_NAME = '關懷員備註';
+
+/**
+ * 通行碼 → 角色。
+ *   staff 幹部：原本的全部權限（報到、備註、行李照）
+ *   care  關懷員：只能讀名單 + 寫關懷員備註，碰不到報到
+ * 判斷 staff 的那一行跟改版前一模一樣，原本的行為不受影響。
+ */
+function role_(token) {
+  if (token === API_CONFIG.TOKEN) return 'staff';
+  if (API_CONFIG.CARE_TOKEN && token === API_CONFIG.CARE_TOKEN) return 'care';
+  return '';
+}
+
+/* 關懷員能呼叫的動作就這三個。權限擋在這裡而不是只靠前端少放按鈕 ——
+   前端是公開的靜態檔，誰都能自己組一個網址出來。 */
+const CARE_ACTIONS = ['getAllData', 'getDeltaUpdates', 'careNote'];
 
 /* ══════════ 欄位定位：認標題，不認位置 ══════════ */
 /**
@@ -189,13 +215,20 @@ function uploadPhoto_(p) {
 function handleApi_(p) {
   var cb = p.callback || '';
   try {
-    if (p.token !== API_CONFIG.TOKEN) {
+    var role = role_(p.token);
+    if (!role) {
       return jsonOut_({ error: 'BAD_TOKEN', message: '通行碼錯誤' }, cb);
+    }
+    if (role === 'care' && CARE_ACTIONS.indexOf(p.action) < 0) {
+      return jsonOut_({ error: 'FORBIDDEN', message: '這組通行碼沒有這個權限' }, cb);
     }
 
     switch (p.action) {
       case 'getAllData':
-        return jsonOut_(getAllData(), cb);
+        // 角色回給前端，讓它知道該待在哪一頁（幹部碼開到關懷員頁會自己轉走，反之亦然）
+        var all = getAllData();
+        all.role = role;
+        return jsonOut_(all, cb);
 
       case 'getDeltaUpdates':
         return jsonOut_(getDeltaUpdates(Number(p.lastSyncTime) || 0,
@@ -203,6 +236,9 @@ function handleApi_(p) {
 
       case 'updateData':
         return jsonOut_(apiUpdate_(p), cb);
+
+      case 'careNote':
+        return jsonOut_(apiCareNote_(p), cb);
 
       default:
         return jsonOut_({ error: 'BAD_ACTION', message: '不支援的動作：' + p.action }, cb);
@@ -303,6 +339,58 @@ function apiUpdate_(p) {
   } finally {
     lock.releaseLock();
   }
+}
+
+
+/* ══════════ 關懷員備註（只碰 S 欄） ══════════ */
+/**
+ * 關懷員頁面唯一的寫入動作。
+ *
+ * 只寫「關懷員備註」這一格，報到／掃碼人／時間戳記／幹部備註一格都不動 ——
+ * 所以就算關懷員的通行碼外流，也改不動任何人的報到狀態。
+ *
+ * 和 M 欄一樣用 append 不覆寫：兩個關懷員同時寫同一個學員，
+ * 後送到的那筆才不會把前面那段整個吃掉。
+ */
+function apiCareNote_(p) {
+  var row  = Number(p.row);
+  var note = String(p.note || '').trim();
+  var op   = String(p.op || '');
+
+  if (!row || row < 2) return { error: 'BAD_ROW',  message: '列號不正確' };
+  if (!note)           return { error: 'NO_NOTE',  message: '備註是空的' };
+
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(25000)) return { error: 'BUSY', message: '系統忙碌中，請再試一次' };
+
+  try {
+    var sheet   = SpreadsheetApp.getActive().getSheetByName(CONFIG.SOURCE_SHEET);
+    var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
+    var col     = headers.lastIndexOf(CARE_COL_NAME);
+    if (col < 0) {
+      return { error: 'NO_COLUMN',
+               message: '名單第一列找不到「' + CARE_COL_NAME + '」欄，請先加上這個標題' };
+    }
+
+    var cell    = sheet.getRange(row, col + 1);
+    var newNote = appendLog_(cell.getDisplayValue(),
+                             [careLine_(op, atOrNow_(p.at), note)]);
+    cell.setValue(newNote);
+    // 多行紀錄沒開自動換行的話，在 Sheet 上只看得到第一行
+    try { cell.setWrap(true); } catch (e) {}
+
+    return {
+      success: true, row: row, careNote: newNote,
+      name: sheet.getRange(row, 2).getDisplayValue()
+    };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/* 關懷員的紀錄標成「(關懷員)」，跟幹部的「(義工)」一眼分得出來 */
+function careLine_(op, at, what) {
+  return (op || '?') + '(關懷員) ' + at + ' ' + what;
 }
 
 

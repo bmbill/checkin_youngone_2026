@@ -1,0 +1,858 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <title>關懷員系統</title>
+  <script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <style>
+    /* 配色沿用報到頁，只把主色從 sage 換成 blue，
+       兩個頁面擺在一起一眼就分得出來現在開的是哪一個 */
+    :root {
+      --m-sage: #8d9e8c; --m-blue: #92a8d1; --m-coffee: #8d746a; --m-sand: #f4f1ea;
+      --m-border: #e8e1da; --success: #2e7d32; --danger: #d9534f; --m-text: #5d5d5d;
+    }
+
+    html { height: 100%; overflow: hidden; background-color: var(--m-sand); }
+
+    body {
+      font-family: "PingFang TC", "微軟正黑體", sans-serif;
+      margin: 0; padding: 0; height: 100%; width: 100%;
+      overflow-y: auto; -webkit-overflow-scrolling: touch;
+      background-color: var(--m-sand); color: var(--m-text);
+      overscroll-behavior-y: contain;
+    }
+
+    .container {
+      background: #fff; padding: 15px; border-radius: 16px;
+      width: 100%; max-width: 600px; margin: 10px auto; box-sizing: border-box;
+      box-shadow: 0 5px 15px rgba(0,0,0,0.05);
+      min-height: calc(100vh - 20px); position: relative;
+      display: flex; flex-direction: column;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .title-area { margin: 5px 0 10px 0; }
+    .main-title { color: var(--m-blue); font-size: 22px; font-weight: bold; text-align: center; letter-spacing: 2px; margin-bottom: 2px; }
+    .sync-time-row { text-align: right; margin-right: 5px; height: 15px; }
+    .sync-time { font-size: 11px; color: #bbb; }
+    .sync-time.warning { color: var(--danger); font-weight: bold; animation: blink 1s infinite; }
+
+    .op-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+    .op-input { flex: 1; padding: 8px 10px; border: 1px solid var(--m-border); border-radius: 8px;
+                font-size: 14px; background: #fafafa; outline: none; box-sizing: border-box; }
+    .net-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--danger); flex: none; }
+    .net-dot.on { background: var(--m-sage); }
+    .pending-tag { font-size: 11px; color: var(--danger); font-weight: bold; }
+
+    .btn-camera { width: 100%; padding: 12px; background: var(--m-blue); color: white; border: none;
+                  border-radius: 10px; cursor: pointer; margin-bottom: 12px; font-size: 16px; font-weight: bold; flex-shrink: 0; }
+    .search-group { display: flex; gap: 8px; margin-bottom: 15px; flex-shrink: 0; }
+    .search-input-wrapper { flex: 1; position: relative; display: flex; align-items: center; }
+    .search-input { width: 100%; padding: 12px; border: 1px solid var(--m-border); border-radius: 8px;
+                    font-size: 16px; background: #fafafa; outline: none; box-sizing: border-box; }
+    .search-clear-btn { position: absolute; right: 10px; background: #ddd; color: white; border-radius: 50%;
+                        width: 22px; height: 22px; display: flex; align-items: center; justify-content: center;
+                        font-size: 14px; border: none; z-index: 5; }
+    .btn-search { padding: 12px 20px; background: var(--m-blue); color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; }
+
+    #listArea, #editArea { width: 100%; }
+    .result-item { display: flex; justify-content: space-between; align-items: center; padding: 15px; border-bottom: 1px solid #f0f0f0; background: #fff; }
+    .result-info { display: flex; flex-direction: column; flex: 1; }
+    .result-name { font-size: 18px; font-weight: bold; color: #333; }
+    .result-id-small { color: #999; font-size: 14px; margin-left: 8px; }
+    .result-tags { display: flex; gap: 4px; margin: 4px 0; }
+    .tag-item { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: #fdfaf8; border: 1px solid var(--m-coffee); color: var(--m-coffee); font-weight: bold; }
+    .tag-plate { font-size: 12px; padding: 1px 7px; border-radius: 4px; background: #f3f6fa;
+                 border: 1px solid var(--m-blue); color: var(--m-blue); font-weight: bold;
+                 letter-spacing: 1px; white-space: nowrap; }
+    .status-undone { color: var(--danger); font-size: 14px; font-weight: bold; }
+    .status-done { color: var(--success); font-size: 14px; font-weight: bold; }
+    .btn-action { background: var(--m-blue); color: white; border: none; padding: 10px 20px; border-radius: 20px; font-weight: bold; cursor: pointer; }
+    .room-head { display: flex; justify-content: space-between; align-items: baseline; padding: 12px 15px; margin-bottom: 4px;
+                 background: #fdfaf8; border: 1px solid var(--m-coffee); border-radius: 8px;
+                 color: var(--m-coffee); font-size: 18px; font-weight: bold; }
+
+    .edit-container { animation: fadeIn 0.3s ease; padding-bottom: 30px; }
+    .name-title { color: var(--m-coffee); font-size: 26px; font-weight: bold; margin-bottom: 12px;
+                  display: flex; align-items: center; justify-content: space-between; }
+    .room-info-strip { background: #fff; border: 2.5px solid var(--m-coffee); border-radius: 10px;
+                       display: flex; justify-content: space-around; padding: 12px; margin-bottom: 15px; }
+    .room-item { font-size: 20px; font-weight: bold; color: var(--m-coffee); text-align: center; }
+    .room-item span { color: #333; display: block; font-size: 24px; margin-top: 4px; }
+
+    /* 報到狀態：唯讀。刻意做成一條扁扁的橫幅而不是可以按的方塊，
+       免得關懷員以為點下去可以改 —— 這個頁面完全沒有報到的權限 */
+    .check-strip { border-radius: 10px; padding: 10px 12px; font-size: 15px; font-weight: bold;
+                   text-align: center; margin-bottom: 15px; }
+    .check-strip.done { background: #f0fff4; border: 1.5px solid var(--success); color: var(--success); }
+    .check-strip.undone { background: #fdecea; border: 1.5px solid var(--danger); color: var(--danger); }
+    .check-strip .sub { display: block; font-size: 12px; font-weight: normal; color: #999; margin-top: 3px; }
+
+    .sect-title { font-size: 14px; font-weight: bold; color: var(--m-blue); margin: 0 0 8px; }
+    .sect-title.muted { color: #aaa; }
+    .note-log { background: #f8f8f8; border: 1px solid #f0f0f0; border-radius: 8px; padding: 10px 12px;
+                font-size: 12px; color: #888; line-height: 1.8; margin: 0 0 15px; }
+    .note-log.care { background: #f3f6fa; border-color: #dbe4f0; color: #667; }
+    .note-log.empty { color: #ccc; }
+    .note-input { width: 100%; min-height: 90px; padding: 12px; border: 1px solid var(--m-border);
+                  border-radius: 12px; font-size: 16px; outline: none; resize: vertical;
+                  background: #fff; box-sizing: border-box; margin-bottom: 10px; }
+    .btn-save { width: 100%; height: 60px; background: var(--m-blue); color: white; border: none;
+                border-radius: 15px; font-size: 20px; font-weight: bold; cursor: pointer;
+                box-shadow: 0 4px 10px rgba(0,0,0,0.1); margin-bottom: 25px; }
+    .btn-save:disabled { background: #ccc; box-shadow: none; }
+    .warn-box { background: #fdecea; border: 1px solid var(--danger); color: var(--danger);
+                border-radius: 8px; padding: 10px 12px; font-size: 13px; margin-bottom: 15px; }
+
+    #successOverlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.4);
+                      display: none; justify-content: center; align-items: center; z-index: 1000; backdrop-filter: blur(3px); }
+    .success-card { background: white; width: 80%; max-width: 300px; padding: 35px 20px; border-radius: 24px; text-align: center; }
+    #loadingOverlay { position: fixed; top:0; left:0; width:100%; height:100%; background: var(--m-sand);
+                      display:flex; flex-direction: column; justify-content:center; align-items:center; z-index:999; }
+    .spinner { border: 4px solid rgba(0,0,0,.1); width: 30px; height: 30px; border-radius: 50%;
+               border-left-color: var(--m-blue); animation: spin 1s linear infinite; margin-bottom: 10px; }
+
+    #gateOverlay { position: fixed; top:0; left:0; width:100%; height:100%; background: var(--m-sand);
+                   display: none; justify-content: center; align-items: center; z-index: 1001; padding: 20px; box-sizing: border-box; }
+    .gate-card { background:#fff; width:100%; max-width:340px; padding:28px 22px; border-radius:20px;
+                 text-align:center; box-shadow: 0 5px 20px rgba(0,0,0,.08); }
+
+    #reader { width: 100%; display: none; margin-bottom: 15px; border-radius: 12px;
+              overflow: hidden; border: 2px solid var(--m-blue);
+              aspect-ratio: 1 / 1; height: auto !important; background: #000; }
+    #reader video { width: 100% !important; height: 100% !important; display: block; object-fit: cover; }
+    .scan-info { font-size: 11px; color: #bbb; text-align: center; margin: -6px 0 12px; }
+    .scan-flash { position: fixed; left: 0; right: 0; top: 0; z-index: 900; padding: 14px;
+                  text-align: center; font-size: 20px; font-weight: bold; color: #fff; display: none; }
+    .scan-flash.ok { background: var(--success); }
+    .scan-flash.err { background: var(--danger); }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes blink { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+  </style>
+</head>
+<body onload="initSystem()">
+
+<div id="loadingOverlay"><div class="spinner"></div><div>名單同步中...</div></div>
+
+<div id="gateOverlay">
+  <div class="gate-card">
+    <div class="main-title" style="margin-bottom:6px;">關懷員系統</div>
+    <div style="font-size:13px; color:#999; margin-bottom:18px;">首次使用請輸入通行碼，之後這支手機就不用再輸入</div>
+    <input type="text" id="gateOp" class="op-input" placeholder="你的名字（關懷員）" autocomplete="name" style="margin-bottom:10px;">
+    <input type="password" id="gateToken" class="op-input" placeholder="通行碼" autocomplete="off" style="margin-bottom:16px;">
+    <button class="btn-camera" style="margin:0;" onclick="enterSystem()">進入系統</button>
+    <div id="gateMsg" style="font-size:13px; color:var(--danger); margin-top:10px; min-height:18px;"></div>
+  </div>
+</div>
+
+<div id="scanFlash" class="scan-flash"></div>
+
+<div id="successOverlay">
+  <div class="success-card">
+    <div id="popIcon" style="font-size:64px; margin-bottom:12px;"></div>
+    <div id="popTitle" style="font-size:22px; font-weight:bold; color:#333; margin-bottom:5px;"></div>
+    <div id="successInfo" style="font-size:16px; color:#666;"></div>
+  </div>
+</div>
+
+<div class="container" id="mainContainer">
+  <div class="title-area">
+    <div class="main-title">關懷員系統</div>
+    <div class="sync-time-row">
+      <span id="pendingTag" class="pending-tag"></span>
+      <span id="syncDisplay" class="sync-time">上次同步：--:--:--</span>
+      <span id="appVer" class="sync-time"></span>
+    </div>
+  </div>
+
+  <div class="op-row">
+    <div id="netDot" class="net-dot"></div>
+    <input type="text" id="operatorName" class="op-input" placeholder="你的名字（關懷員）" autocomplete="name">
+  </div>
+
+  <button class="btn-camera" id="scanBtn" onclick="toggleScanner()">📷 開啟相機掃描</button>
+  <div id="reader"></div>
+  <div id="scanInfo" class="scan-info" style="display:none;"></div>
+
+  <div class="search-group">
+    <div class="search-input-wrapper">
+      <input type="text" id="keyword" class="search-input" placeholder="搜尋編號、姓名、房號" oninput="autoQuery()" onkeypress="if(event.keyCode==13) autoQuery(true)">
+      <button class="search-clear-btn" onclick="clearSearch()">✕</button>
+    </div>
+    <button class="btn-search" onclick="query()">搜尋</button>
+  </div>
+
+  <div id="listArea"></div>
+  <div id="editArea" style="display:none;"></div>
+</div>
+
+<script>
+  /* ══════════════════════════════════════════════════════
+     關懷員頁面。跟報到頁 (index.html) 共用同一份名單、同一支 API，
+     但權限完全不同：
+
+       能做   查詢、掃碼、讀備註、寫「關懷員備註」(S 欄)
+       不能做 報到、取消報到、拍行李照、改 M 欄幹部備註
+
+     權限不是靠這個頁面「少放幾顆按鈕」來擋的 —— 後端
+     Api.gs 會依通行碼判斷角色，關懷員的碼連 updateData
+     都呼叫不動。這頁只是不去呼叫它而已。
+     ══════════════════════════════════════════════════════ */
+  const API_URL = 'https://script.google.com/macros/s/AKfycbwA7ZkcnBq6vRA-etn8cclum03wvXE3bSOT6IeIv__tuZodCpwkGU70KKw1NQnILMTB/exec';
+
+  const APP_VERSION = 'care-v1';
+
+  // 通行碼一樣不寫死在這裡 —— 本檔會公開在 GitHub Pages 上
+  var TOKEN = localStorage.getItem('ck_token') || '';
+
+  /* 名單快取和待補送佇列都用自己的 key。跟報到頁共用一組的話，
+     兩個頁面會互相覆寫對方的暫存，離線時還可能互相把人踢來踢去。
+     只有 ck_token / ck_op 是刻意共用的（見 initSystem 的角色導向）。 */
+  const CACHE_KEY = 'ck_care_roster_v1';
+  const QUEUE_KEY = 'ck_care_queue';
+
+  const CARE_COL = '關懷員備註';
+
+  function forceReflow() {
+    const b = document.body;
+    const d = b.style.display;
+    b.style.display = 'none';
+    b.offsetHeight;
+    b.style.display = d;
+  }
+
+  var fullDataRows = [], currentHeaders = [], sysIndices = {}, lastSyncTime = 0, currentTotalRows = 0, html5QrCode = null;
+  var currentEditRowData = null;
+
+  /* ══════════ 傳輸層（JSONP，與報到頁同一套） ══════════ */
+
+  /* 這張表刻意沒有 updateData。就算哪天不小心寫錯呼叫，
+     這個頁面在傳輸層就送不出任何一筆報到寫入。 */
+  const ARG_MAP = {
+    getAllData:      [],
+    getDeltaUpdates: ['lastSyncTime', 'localTotalRows'],
+    careNote:        ['row', 'note', 'op', 'at']
+  };
+  var jsonpSeq = 0;
+
+  function jsonp(funcName, args) {
+    return new Promise((resolve, reject) => {
+      const cb = '__care' + (++jsonpSeq) + '_' + Math.floor(Math.random() * 1e6);
+      const s  = document.createElement('script');
+      const cleanup = () => { clearTimeout(timer); try { delete window[cb]; } catch (e) {} s.remove(); };
+      const timer = setTimeout(() => { cleanup(); reject(new Error('連線逾時')); }, 25000);
+
+      window[cb] = data => {
+        cleanup();
+        if (data && data.error) reject(new Error(data.message || data.error));
+        else resolve(data);
+      };
+      s.onerror = () => { cleanup(); reject(new Error('連線失敗')); };
+
+      const params = { api: '1', action: funcName, token: TOKEN, callback: cb };
+      (ARG_MAP[funcName] || []).forEach((key, i) => {
+        if (args[i] !== undefined && args[i] !== null) params[key] = args[i];
+      });
+      s.src = API_URL + '?' + new URLSearchParams(params).toString();
+      document.head.appendChild(s);
+    });
+  }
+
+  async function callServer(funcName, args = [], retries = 3) {
+    let lastErr;
+    for (let i = 0; i <= retries; i++) {
+      try {
+        const res = await jsonp(funcName, args);
+        setNetOK(true);
+        return res;
+      } catch (err) {
+        lastErr = err;
+        if (i < retries) await new Promise(r => setTimeout(r, 1000));
+      }
+    }
+    setNetOK(false);
+    throw lastErr;
+  }
+
+  function setNetOK(ok) {
+    document.getElementById('netDot').className = 'net-dot' + (ok && pendingQueue.length === 0 ? ' on' : '');
+  }
+
+  /* ══════════ 離線補送：關懷員備註打完就是打完了，不能因為沒訊號就消失 ══════════ */
+
+  var pendingQueue = [];
+  try { pendingQueue = JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]'); } catch (e) { pendingQueue = []; }
+
+  function savePending() {
+    localStorage.setItem(QUEUE_KEY, JSON.stringify(pendingQueue));
+    var tag = document.getElementById('pendingTag');
+    tag.innerText = pendingQueue.length ? ('⚠ 待補送 ' + pendingQueue.length + ' 筆　') : '';
+    setNetOK(pendingQueue.length === 0);
+  }
+
+  var flushing = false;
+  async function flushPending() {
+    if (flushing || !pendingQueue.length) return;
+    flushing = true;
+    while (pendingQueue.length) {
+      const job = pendingQueue[0];
+      try {
+        await callServer('careNote', [job.row, job.note, job.op, job.at], 1);
+        pendingQueue.shift();
+        savePending();
+      } catch (e) { break; }
+    }
+    flushing = false;
+  }
+  setInterval(flushPending, 5000);
+  window.addEventListener('online', flushPending);
+
+  /* ══════════ 進場門檻 ══════════ */
+
+  function showGate(msg) {
+    document.getElementById('loadingOverlay').style.display = 'none';
+    document.getElementById('gateOverlay').style.display = 'flex';
+    document.getElementById('gateOp').value = localStorage.getItem('ck_op') || '';
+    document.getElementById('gateMsg').innerText = msg || '';
+  }
+
+  function enterSystem() {
+    var op = document.getElementById('gateOp').value.trim();
+    var tk = document.getElementById('gateToken').value.trim();
+    if (!op) { document.getElementById('gateMsg').innerText = '請填你的名字'; return; }
+    if (!tk) { document.getElementById('gateMsg').innerText = '請填通行碼'; return; }
+    localStorage.setItem('ck_op', op);
+    localStorage.setItem('ck_token', tk);
+    TOKEN = tk;
+    document.getElementById('gateOverlay').style.display = 'none';
+    document.getElementById('loadingOverlay').style.display = 'flex';
+    initSystem();
+  }
+
+  async function initSystem() {
+    if (!TOKEN) { showGate(''); return; }
+
+    document.getElementById('operatorName').value = localStorage.getItem('ck_op') || '';
+    document.getElementById('operatorName').addEventListener('change', e => {
+      localStorage.setItem('ck_op', e.target.value.trim());
+    });
+    savePending();
+
+    try {
+      const res = await callServer('getAllData');
+
+      /* 打的是幹部通行碼 → 這支手機要用的是報到頁，直接送過去。
+         只認伺服器當下回的角色，不看快取 —— 看快取的話兩個頁面
+         離線時會互相 redirect，變成無限迴圈。 */
+      if (res.role === 'staff') { location.replace('index.html'); return; }
+
+      fullDataRows = res.rows; currentHeaders = res.headers; sysIndices = res.sysIndices;
+      lastSyncTime = res.serverTime; currentTotalRows = res.totalRows;
+      localStorage.setItem(CACHE_KEY, JSON.stringify(res));
+      document.getElementById('loadingOverlay').style.display = 'none';
+      updateSyncTime();
+      setInterval(autoSync, 30000);
+
+      document.body.addEventListener('touchstart', function() {}, {passive: true});
+    } catch (err) {
+      var msg = String(err && err.message);
+      if (msg.indexOf('通行碼') >= 0 || msg.indexOf('權限') >= 0) {
+        localStorage.removeItem('ck_token'); TOKEN = '';
+        showGate('通行碼錯誤，請重新輸入');
+        return;
+      }
+      const cache = localStorage.getItem(CACHE_KEY);
+      if (cache) {
+        const res = JSON.parse(cache);
+        fullDataRows = res.rows; currentHeaders = res.headers; sysIndices = res.sysIndices;
+        lastSyncTime = res.serverTime; currentTotalRows = res.totalRows;
+        document.getElementById('loadingOverlay').style.display = 'none';
+        document.getElementById('syncDisplay').innerText = '⚠ 離線模式（使用本機快取）';
+        document.getElementById('syncDisplay').className = 'sync-time warning';
+        setInterval(autoSync, 30000);
+      } else {
+        alert('無法載入名單：' + String((err && err.message) || err));
+      }
+    }
+  }
+
+  function updateSyncTime() {
+    var el = document.getElementById('syncDisplay');
+    el.className = 'sync-time';
+    el.innerText = '上次同步：' + new Date().toLocaleTimeString('zh-TW', { hour12: false });
+  }
+
+  async function autoSync() {
+    try {
+      const res = await callServer('getDeltaUpdates', [lastSyncTime, currentTotalRows], 1);
+      (res.updates || []).forEach(function (u) { fullDataRows[u.row - 2] = u.values; });
+      (res.newRows || []).forEach(function (n) { fullDataRows[n.row - 2] = n.values; });
+      lastSyncTime = res.serverTime; currentTotalRows = res.serverTotalRows;
+      updateSyncTime();
+
+      // 別人剛好改了正在看的這個學員 → 就地重畫，不要把畫面關掉
+      if (currentEditRowData && fullDataRows[currentEditRowData.row - 2]) {
+        var open = document.getElementById('editArea');
+        if (open.style.display !== 'none' && !document.getElementById('careInp').value.trim()) {
+          showEdit({ row: currentEditRowData.row, values: fullDataRows[currentEditRowData.row - 2] });
+        }
+      }
+    } catch (e) {
+      var el = document.getElementById('syncDisplay');
+      el.innerText = '⚠ 同步失敗，稍後自動重試';
+      el.className = 'sync-time warning';
+    }
+  }
+
+  document.getElementById('appVer').innerText = '　' + APP_VERSION;
+
+  /* ══════════ 欄位與工具 ══════════ */
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+
+  function colIndex(name, fallback) {
+    var i = currentHeaders.indexOf(name);
+    return i >= 0 ? i : fallback;
+  }
+  function colGroup() { return colIndex('組別', 6); }
+  function colRoom()  { return colIndex('預排房號', 2); }
+  /* 關懷員備註沒有 fallback：找不到就是找不到，寧可畫面上老實說
+     「名單少了這一欄」，也不要猜一個欄位號碼把字寫到別人的資料上 */
+  function colCare()  { return currentHeaders.indexOf(CARE_COL); }
+
+  /* 車牌（H 欄）同樣不給 fallback：H 欄原本的標題是「備註」，
+     標題還沒改就用位置猜的話，畫面上會把備註當成車牌印出來 */
+  function colPlate() { return currentHeaders.indexOf('車牌'); }
+  function plateOf(v) {
+    var i = colPlate();
+    return i < 0 ? '' : String(v[i] || '').trim();
+  }
+  function plateTag(v) {
+    var p = plateOf(v);
+    return p ? '<span class="tag-plate">🚗 ' + esc(p) + '</span>' : '';
+  }
+
+  function opName() { return document.getElementById('operatorName').value.trim(); }
+
+  function hhmm() {
+    var d = new Date();
+    return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+  }
+
+  var LOG_SEP = '\n';
+  function careLine(op, at, what) { return (op || '?') + '(關懷員) ' + at + ' ' + what; }
+  function appendLog(existing, entries) {
+    var base = String(existing || '').trim();
+    entries = (entries || []).filter(Boolean);
+    if (!entries.length) return base;
+    return base ? base + LOG_SEP + entries.join(LOG_SEP) : entries.join(LOG_SEP);
+  }
+  function logHtml(text) {
+    return esc(String(text || '').trim()).split(/\r?\n| \/ /).join('<br>');
+  }
+
+  /* ══════════ 查詢（與報到頁同一套比對規則） ══════════ */
+
+  function findMatches(keyword) {
+    var k = String(keyword || '').trim().toLowerCase();
+    var matches = [];
+    if (!k) return matches;
+    for (var i = 0; i < fullDataRows.length; i++) {
+      var row = fullDataRows[i];
+      if ((row[0]||"").toString().toLowerCase().includes(k) || (row[1]||"").toString().toLowerCase().includes(k)) {
+        matches.push({ row: i + 2, values: row });
+      }
+    }
+    return matches;
+  }
+
+  function findRoom(keyword) {
+    var k = String(keyword || '').trim().toLowerCase();
+    var out = [], ri = colRoom();
+    if (!k) return out;
+    for (var i = 0; i < fullDataRows.length; i++) {
+      if (String(fullDataRows[i][ri] || '').trim().toLowerCase() === k) {
+        out.push({ row: i + 2, values: fullDataRows[i] });
+      }
+    }
+    return out;
+  }
+
+  var ID_PATTERN = /^TP\d{4}$/i;
+  var lastAutoTxt = '', lastAutoAt = 0;
+
+  function autoQuery(force) {
+    var el = document.getElementById('keyword');
+    var v = el.value.trim();
+    if (!force && !ID_PATTERN.test(v)) return;
+    if (ID_PATTERN.test(v)) { v = v.toUpperCase(); el.value = v; }
+
+    var now = Date.now();
+    if (v === lastAutoTxt && now - lastAutoAt < 1500) return;
+    lastAutoTxt = v; lastAutoAt = now;
+
+    query();
+  }
+
+  /* 連續掃描：條碼槍當鍵盤用，但 showEdit() 每次都會 blur()，
+     掃完一個人之後焦點就沒了，下一槍打的字沒地方去。
+     所以在 document 層攔，跟焦點脫鉤（與報到頁同一套作法）。 */
+  var GUN_GAP = 500;
+  var gunBuf = '', gunAt = 0;
+
+  document.addEventListener('keydown', function (e) {
+    var t = e.target, tag = t && t.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || (t && t.isContentEditable)) return;
+    if (e.ctrlKey || e.altKey || e.metaKey) return;
+
+    var now = Date.now();
+    if (now - gunAt > GUN_GAP) gunBuf = '';
+    gunAt = now;
+
+    if (e.key && e.key.length === 1) gunBuf = (gunBuf + e.key).slice(-6);
+    else if (e.key !== 'Enter') gunBuf = '';
+
+    if (!ID_PATTERN.test(gunBuf)) return;
+    var id = gunBuf.toUpperCase();
+    gunBuf = '';
+
+    // 備註打到一半就掃下一個人 → 那段字會不見，先問一下
+    if (unsavedNote() && !confirm('備註還沒送出，換人就會不見。確定換人？')) return;
+
+    document.getElementById('keyword').value = id;
+    autoQuery();
+  });
+
+  function unsavedNote() {
+    var el = document.getElementById('careInp');
+    return !!(el && el.value.trim());
+  }
+
+  function query() {
+    var inputField = document.getElementById('keyword');
+    var k = inputField.value.trim();
+    if (!k) return;
+
+    document.activeElement.blur();
+    document.getElementById('listArea').innerHTML = "";
+    document.getElementById('editArea').style.display = "none";
+
+    var mates = findRoom(k);
+    if (mates.length) {
+      var done = 0;
+      mates.forEach(function (it) { if (it.values[sysIndices.check] == "1") done++; });
+      renderList(mates, '<div class="room-head"><span>' + esc(k) + ' 房</span><span class="' +
+                 (done === mates.length ? 'status-done' : 'status-undone') + '">' +
+                 done + ' / ' + mates.length + ' 已報到</span></div>');
+      setTimeout(function(){ forceReflow(); }, 50);
+      return;
+    }
+
+    var matches = findMatches(k);
+    if (matches.length === 0) {
+      document.getElementById('listArea').innerHTML = '<div style="text-align:center; padding:40px; color:#ccc;">🔍 查無資料</div>';
+    } else if (matches.length === 1) {
+      showEdit(matches[0]);
+    } else {
+      renderList(matches);
+    }
+    setTimeout(function(){ forceReflow(); }, 50);
+  }
+
+  function renderList(items, header) {
+    var h = '<div style="margin-top:10px;">' + (header || '');
+    items.forEach(function (item) {
+      var v = item.values, isDone = (v[sysIndices.check] == "1");
+      var care = String(v[colCare()] || '').trim();
+      h += '<div class="result-item">' +
+           '  <div class="result-info">' +
+           '    <div><span class="result-name">' + esc(v[1]) + '</span><span class="result-id-small"> ' + esc(v[0]) + '</span></div>' +
+           '    <div class="result-tags">' +
+                  (v[colGroup()] ? '<span class="tag-item">' + esc(v[colGroup()]) + '</span>' : '') +
+                  (v[colRoom()]  ? '<span class="tag-item">房: ' + esc(v[colRoom()]) + '</span>' : '') +
+                  plateTag(v) +
+                  (care ? '<span class="tag-item">📝 有關懷紀錄</span>' : '') +
+           '    </div>' +
+           '    <div class="' + (isDone ? 'status-done' : 'status-undone') + '">' + (isDone ? '已報到' : '未報到') + '</div>' +
+           '  </div>' +
+           '  <button class="btn-action" onclick=\'showEdit(' + JSON.stringify(item) + ')\'>查看</button>' +
+           '</div>';
+    });
+    document.getElementById('listArea').innerHTML = h + '</div>';
+    setTimeout(function () {
+      forceReflow();
+      var el = document.getElementById('listArea');
+      var scrollTop = window.pageYOffset || document.documentElement.scrollTop || document.body.scrollTop || 0;
+      var targetTop = el.getBoundingClientRect().top + scrollTop;
+      document.body.scrollTop = targetTop;
+      document.documentElement.scrollTop = targetTop;
+    }, 80);
+  }
+
+  /* ══════════ 學員面板 ══════════ */
+
+  function showEdit(item, done) {
+    currentEditRowData = item;
+    var v = item.values, isDone = (v[sysIndices.check] == "1");
+
+    document.activeElement.blur();
+
+    var h = '<div class="edit-container">';
+    var plate = plateOf(v);
+    h += '<div class="name-title"><div>' + esc(v[1]) +
+         '<span style="font-size:15px; color:#999; font-weight:normal;"> ' + esc(v[0]) + '</span>' +
+         (plate ? ' <span class="tag-plate" style="font-size:14px;">🚗 ' + esc(plate) + '</span>' : '') + '</div>' +
+         '<button onclick="clearUI()" style="background:none; border:none; font-size:24px; color:#ccc;">✕</button></div>';
+
+    if (done) h += '<div class="check-strip done">✓ 關懷員備註已送出</div>';
+
+    // 報到狀態：看得到，但這個頁面沒有任何地方可以改它
+    var by = (sysIndices.op != null && v[sysIndices.op]) ? '　' + esc(v[sysIndices.op]) : '';
+    h += isDone
+      ? '<div class="check-strip done">✅ 已報到<span class="sub">' + esc(v[sysIndices.time] || '') + by + '</span></div>'
+      : '<div class="check-strip undone">⬜ 尚未報到</div>';
+
+    h += '<div class="room-info-strip">' +
+         '<div class="room-item">組別 <span>' + esc(v[colGroup()] || '-') + '</span></div>' +
+         '<div class="room-item">房號 <span>' + esc(v[colRoom()] || '-') + '</span></div></div>';
+
+    // ── 關懷員備註（S 欄）：本頁唯一可以寫的東西
+    var ci = colCare();
+    h += '<div class="sect-title">關懷員備註</div>';
+    if (ci < 0) {
+      h += '<div class="warn-box">名單第一列找不到「' + CARE_COL + '」欄，' +
+           '請先在試算表加上這個標題，才能寫入備註。</div>';
+    } else {
+      var care = String(v[ci] || '').trim();
+      h += care ? '<div class="note-log care">' + logHtml(care) + '</div>'
+                : '<div class="note-log care empty">還沒有關懷紀錄</div>';
+      h += '<textarea id="careInp" class="note-input" placeholder="新增關懷員備註..."></textarea>';
+      h += '<button id="saveBtn" class="btn-save" onclick="saveCare(' + item.row + ')">送出備註</button>';
+    }
+
+    // ── 幹部備註（M 欄）：唯讀，讓關懷員看得到報到台當下發生了什麼
+    var staffNote = String(v[sysIndices.note] || '').trim();
+    h += '<div class="sect-title muted">幹部備註（唯讀）</div>';
+    h += staffNote ? '<div class="note-log">' + logHtml(staffNote) + '</div>'
+                   : '<div class="note-log empty">（無）</div>';
+
+    h += '</div>';
+
+    document.getElementById('listArea').innerHTML = "";
+    var editArea = document.getElementById('editArea');
+    editArea.innerHTML = h;
+    editArea.style.display = "block";
+
+    setTimeout(function () {
+      forceReflow();
+      var el = document.getElementById('editArea');
+      var scrollTop = window.pageYOffset || document.documentElement.scrollTop || document.body.scrollTop || 0;
+      var targetTop = el.getBoundingClientRect().top + scrollTop;
+      document.body.scrollTop = targetTop;
+      document.documentElement.scrollTop = targetTop;
+    }, 150);
+  }
+
+  /* 只更新 S 欄。報到、掃碼人、時間戳記這幾格連碰都不碰 ——
+     本機這份 fullDataRows 也一樣，免得畫面顯示出跟雲端不同的報到狀態。 */
+  function applyLocalCare(row, careNote) {
+    var ci = colCare();
+    if (ci < 0) return;
+    var r = fullDataRows[row - 2];
+    if (r) r[ci] = careNote;
+  }
+
+  async function saveCare(row) {
+    var btn  = document.getElementById('saveBtn');
+    var note = document.getElementById('careInp').value.trim();
+    if (!note) { alert('備註是空的'); return; }
+    var op = opName();
+    if (!op) { alert('請先填上你的名字'); document.getElementById('operatorName').focus(); return; }
+    localStorage.setItem('ck_op', op);
+
+    btn.disabled = true; btn.innerText = '⏳ 送出中...';
+    var at = hhmm();
+
+    try {
+      // 送出的是「這次新增的這一段」，串接交給後端，
+      // 兩個關懷員同時寫同一個學員才不會互相蓋掉
+      const res = await callServer('careNote', [row, note, op, at]);
+      applyLocalCare(row, res.careNote);
+      showSuccessPopup(false);
+    } catch (err) {
+      pendingQueue.push({ row: row, note: note, op: op, at: at });
+      savePending();
+      var prev = fullDataRows[row - 2];
+      applyLocalCare(row, appendLog(prev[colCare()], [careLine(op, at, note)]));
+      showSuccessPopup(true);
+    }
+  }
+
+  function showSuccessPopup(offline) {
+    document.getElementById('popIcon').innerText = offline ? '📥' : '✅';
+    document.getElementById('popTitle').innerText = offline ? '已暫存待補送' : '備註已送出';
+    document.getElementById('successInfo').innerHTML =
+      '<b>' + esc(currentEditRowData.values[1]) + '</b> ' + (offline ? '將於連線後同步' : '已同步');
+    document.getElementById('successOverlay').style.display = 'flex';
+    setTimeout(closeSuccess, 1500);
+  }
+
+  /* 送出後留在同一個學員身上，用綠色橫幅標示 ——
+     關懷員常常要接著再補一筆。要換人就按 ✕ 或直接掃下一張碼。 */
+  function closeSuccess() {
+    document.getElementById('successOverlay').style.display = 'none';
+    if (currentEditRowData && fullDataRows[currentEditRowData.row - 2]) {
+      showEdit({ row: currentEditRowData.row, values: fullDataRows[currentEditRowData.row - 2] }, true);
+    } else {
+      clearUI();
+    }
+  }
+
+  function clearUI() {
+    if (unsavedNote() && !confirm('備註還沒送出，關掉就會不見。確定關掉？')) return;
+
+    document.activeElement.blur();
+    document.getElementById('listArea').innerHTML = "";
+    document.getElementById('editArea').style.display = "none";
+    document.getElementById('keyword').value = "";
+    currentEditRowData = null;
+    if (document.body.scrollTo) document.body.scrollTo({ top: 0, behavior: 'smooth' });
+    else document.body.scrollTop = 0;
+
+    setTimeout(function () {
+      forceReflow();
+      if (!(html5QrCode && html5QrCode.isScanning)) document.getElementById('keyword').focus();
+    }, 50);
+  }
+
+  function clearSearch() { document.getElementById('keyword').value = ""; lastAutoTxt = ''; clearUI(); }
+
+  /* ══════════ 相機掃描 ══════════ */
+
+  var lastScanTxt = '', lastScanAt = 0, audioCtx = null;
+
+  function beep(freq, ms) {
+    try {
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      var o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      o.connect(g); g.connect(audioCtx.destination);
+      o.frequency.value = freq; g.gain.value = 0.25;
+      o.start(); setTimeout(function () { o.stop(); }, ms);
+    } catch (e) {}
+    if (navigator.vibrate) navigator.vibrate(freq > 500 ? 60 : [80, 60, 80]);
+  }
+
+  function flash(type, msg) {
+    var el = document.getElementById('scanFlash');
+    el.className = 'scan-flash ' + type;
+    el.innerText = msg;
+    el.style.display = 'block';
+    clearTimeout(el._t);
+    el._t = setTimeout(function () { el.style.display = 'none'; }, 1800);
+  }
+
+  function newScanner() {
+    return new Html5Qrcode("reader", {
+      verbose: false,
+      formatsToSupport: (typeof Html5QrcodeSupportedFormats !== 'undefined')
+        ? [Html5QrcodeSupportedFormats.QR_CODE] : undefined,
+      experimentalFeatures: { useBarCodeDetectorIfSupported: true }
+    });
+  }
+
+  async function toggleScanner() {
+    var r = document.getElementById('reader'), sBtn = document.getElementById('scanBtn');
+
+    if (html5QrCode && html5QrCode.isScanning) {
+      await html5QrCode.stop();
+      r.style.display = 'none'; sBtn.innerText = '📷 開啟相機掃描';
+      document.getElementById('scanInfo').style.display = 'none';
+      forceReflow();
+      return;
+    }
+
+    if (!opName()) { alert('請先填上你的名字'); document.getElementById('operatorName').focus(); return; }
+    localStorage.setItem('ck_op', opName());
+
+    r.style.display = 'block'; sBtn.innerText = '❌ 關閉相機';
+    html5QrCode = html5QrCode || newScanner();
+
+    try {
+      await html5QrCode.start(
+        { facingMode: "environment" },
+        {
+          fps: 15,
+          videoConstraints: {
+            facingMode: 'environment',
+            aspectRatio: { ideal: 1 },
+            width:  { ideal: 1080 },
+            height: { ideal: 1080 },
+            advanced: [{ focusMode: 'continuous' }]
+          }
+        },
+        onScanned
+      );
+      beep(660, 80);
+      showScanInfo();
+      scrollReaderIntoView();
+    } catch (err) {
+      r.style.display = 'none'; sBtn.innerText = '📷 開啟相機掃描';
+      document.getElementById('scanInfo').style.display = 'none';
+      alert('無法開啟相機：' + String((err && err.message) || err));
+    }
+  }
+
+  function scrollReaderIntoView(tries) {
+    tries = tries || 0;
+    var r = document.getElementById('reader');
+    if (r.offsetHeight < 80 && tries < 20) {
+      setTimeout(function () { scrollReaderIntoView(tries + 1); }, 100);
+      return;
+    }
+    try { r.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+    catch (e) { r.scrollIntoView(); }
+  }
+
+  function showScanInfo() {
+    var el = document.getElementById('scanInfo'), s = {};
+    try { s = html5QrCode.getRunningTrackSettings() || {}; } catch (e) {}
+    el.innerText = (s.width || '?') + '×' + (s.height || '?') + '　' +
+                   (('BarcodeDetector' in window) ? '原生解碼' : 'JS 解碼');
+    el.style.display = 'block';
+  }
+
+  /* 相機掃到就是「叫出這個人」，沒有自動報到那條路 ——
+     這個頁面本來就不能報到，所以不需要報到頁的 autoMode 分支。 */
+  function onScanned(txt) {
+    var now = Date.now();
+    if (txt === lastScanTxt && now - lastScanAt < 2500) return;
+    lastScanTxt = txt; lastScanAt = now;
+
+    if (findMatches(txt).length === 0) { beep(300, 250); flash('err', '查無此人：' + txt); return; }
+    if (unsavedNote() && !confirm('備註還沒送出，換人就會不見。確定換人？')) return;
+
+    if (html5QrCode && html5QrCode.isScanning) {
+      html5QrCode.stop().then(function () {
+        document.getElementById('reader').style.display = 'none';
+        document.getElementById('scanInfo').style.display = 'none';
+        document.getElementById('scanBtn').innerText = '📷 開啟相機掃描';
+        forceReflow();
+      });
+    }
+    beep(880, 110);
+    document.getElementById('keyword').value = txt;
+    lastAutoTxt = '';
+    query();
+  }
+</script>
+</body>
+</html>

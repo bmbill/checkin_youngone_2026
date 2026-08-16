@@ -93,6 +93,9 @@
     .result-tags { display: flex; gap: 4px; margin: 4px 0; }
     .tag-item { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: #fdfaf8; border: 1px solid var(--m-coffee); color: var(--m-coffee); font-weight: bold; }
     .tag-warn { font-size: 12px; padding: 2px 8px; border-radius: 4px; background: #fdecea; border: 1px solid var(--danger); color: var(--danger); font-weight: bold; }
+    .tag-plate { font-size: 12px; padding: 1px 7px; border-radius: 4px; background: #f3f6fa;
+                 border: 1px solid var(--m-blue); color: var(--m-blue); font-weight: bold;
+                 letter-spacing: 1px; white-space: nowrap; }
     .done-banner { background: #f0fff4; border: 1.5px solid var(--success); color: var(--success);
                    border-radius: 10px; padding: 10px 12px; font-size: 14px; font-weight: bold;
                    text-align: center; margin-bottom: 12px; }
@@ -393,6 +396,12 @@
 
     try {
       const res = await callServer('getAllData');
+
+      /* 打的是關懷員通行碼 → 這支手機要用的是關懷員頁面，直接送過去。
+         只認伺服器當下回的角色，不看快取 —— 看快取的話兩頁離線時
+         會互相 redirect。舊版後端不會回 role，那就什麼都不會發生。 */
+      if (res.role === 'care') { location.replace('care.html'); return; }
+
       fullDataRows = res.rows; currentHeaders = res.headers; sysIndices = res.sysIndices;
       lastSyncTime = res.serverTime; currentTotalRows = res.totalRows;
       localStorage.setItem('ck_roster_v2', JSON.stringify(res));   // 新增：離線快取
@@ -474,6 +483,22 @@
   function colGroup() { return colIndex('組別', 6); }     // G 欄
   function colRoom()  { return colIndex('預排房號', 2); } // C 欄
   function colPay()   { return colIndex('繳費狀態', 3); } // D 欄
+
+  /* 車牌（H 欄）刻意不給 fallback 位置。上面那三個是名單一定有的欄位，
+     車牌不是 —— H 欄原本的標題是「備註」，萬一標題還沒改就用位置去猜，
+     畫面上會把一整段備註當成車牌號碼印出來。找不到「車牌」這個標題
+     就當作沒有這個功能，什麼都不顯示。 */
+  function colPlate() { return currentHeaders.indexOf('車牌'); }
+
+  function plateOf(v) {
+    var i = colPlate();
+    return i < 0 ? '' : String(v[i] || '').trim();
+  }
+
+  function plateTag(v) {
+    var p = plateOf(v);
+    return p ? '<span class="tag-plate">🚗 ' + esc(p) + '</span>' : '';
+  }
 
   /* 繳費狀態：不是「已收到」就回傳要亮的紅字，報到台當場攔得住 */
   function payWarn(v) {
@@ -618,7 +643,7 @@
       h += '<div class="result-item">' +
            '  <div class="result-info">' +
            '    <div><span class="result-name">' + v[1] + '</span><span class="result-id-small"> ' + v[0] + '</span></div>' +
-           '    <div class="result-tags">' + (v[colGroup()] ? '<span class="tag-item">'+v[colGroup()]+'</span>' : '') + (v[colRoom()] ? '<span class="tag-item">房: '+v[colRoom()]+'</span>' : '') + (payWarn(v) ? '<span class="tag-warn">⚠ '+payWarn(v)+'</span>' : '') + '</div>' +
+           '    <div class="result-tags">' + (v[colGroup()] ? '<span class="tag-item">'+v[colGroup()]+'</span>' : '') + (v[colRoom()] ? '<span class="tag-item">房: '+v[colRoom()]+'</span>' : '') + plateTag(v) + (payWarn(v) ? '<span class="tag-warn">⚠ '+payWarn(v)+'</span>' : '') + '</div>' +
            '    <div class="' + (isDone?'status-done':'status-undone') + '">' + (isDone?'已報到':'未報到') + '</div>' +
            '  </div>' +
            '  <button class="btn-action" onclick=\'showEdit('+JSON.stringify(item)+')\'>報到</button>' +
@@ -645,7 +670,10 @@
     document.activeElement.blur();
 
     var h = '<div class="edit-container">';
-    h += '<div class="name-title"><div>' + v[1] + '<span style="font-size:15px; color:#999; font-weight:normal;"> ' + v[0] + '</span></div>' +
+    // 車牌接在編號後面，沒有車牌的人這一段完全不出現
+    var plate = plateOf(v);
+    h += '<div class="name-title"><div>' + v[1] + '<span style="font-size:15px; color:#999; font-weight:normal;"> ' + v[0] + '</span>' +
+            (plate ? ' <span class="tag-plate" style="font-size:14px;">🚗 ' + esc(plate) + '</span>' : '') + '</div>' +
             '<button onclick="clearUI()" style="background:none; border:none; font-size:24px; color:#ccc;">✕</button></div>';
     if (done) h += '<div class="done-banner">✓ 已完成更新　' + esc(v[sysIndices.time] || '') + '</div>';
     if (payWarn(v)) h += '<div style="margin:-6px 0 12px;"><span class="tag-warn">⚠ '+payWarn(v)+'</span></div>';
