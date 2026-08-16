@@ -535,6 +535,44 @@
     query();
   }
 
+  /* 連續掃描：條碼槍是當鍵盤在用，可是「打字」要有游標落點，
+     而 showEdit() 每次都會 blur() 把鍵盤收起來 —— 掃完一個人之後
+     焦點就沒了，下一槍打出來的字沒有地方去，非得按 ✕ 讓 clearUI()
+     把游標送回搜尋框不可。這就是每次都要按 ✕ 的真正原因。
+
+     與其到處搶焦點（手機上會一直彈出鍵盤、又會跟捲動打架），
+     這裡改成在 document 層攔鍵盤：不管焦點在哪、甚至沒有焦點，
+     只要湊出 TP + 4 位數字就直接查。游標本來就在搜尋框裡的情況
+     不走這裡，交給原本的 oninput，行為完全不變。 */
+  var GUN_GAP = 500;              // 相鄰兩鍵隔太久就當作沒關係的按鍵，緩衝區重來
+  var gunBuf = '', gunAt = 0;
+
+  document.addEventListener('keydown', function (e) {
+    // 游標在輸入框/備註欄裡 → 原本的 oninput 在管，這裡不插手，
+    // 免得幹部打備註打到「TP1234」被攔截、畫面突然跳走
+    var t = e.target, tag = t && t.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || (t && t.isContentEditable)) return;
+    if (e.ctrlKey || e.altKey || e.metaKey) return;
+
+    var now = Date.now();
+    if (now - gunAt > GUN_GAP) gunBuf = '';
+    gunAt = now;
+
+    if (e.key && e.key.length === 1) gunBuf = (gunBuf + e.key).slice(-6);   // 只留最後 6 碼
+    else if (e.key !== 'Enter') gunBuf = '';                               // 槍補的 Enter 不算雜訊
+
+    if (!ID_PATTERN.test(gunBuf)) return;
+    var id = gunBuf.toUpperCase();
+    gunBuf = '';
+
+    // 跟 clearUI() 同一道防線：照片還沒傳成功就換人，等於要重拍
+    if (Object.keys(photoRetry).length &&
+        !confirm('有行李照片還沒上傳成功，離開就要重拍。確定離開？')) return;
+
+    document.getElementById('keyword').value = id;
+    autoQuery();                  // 去重、大小寫、查詢都跟手動掃碼共用同一支
+  });
+
   function query() {
     const inputField = document.getElementById('keyword');
     var k = inputField.value.trim();
