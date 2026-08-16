@@ -239,7 +239,7 @@
 
   <div class="search-group">
     <div class="search-input-wrapper">
-      <input type="text" id="keyword" class="search-input" placeholder="搜尋編號、姓名、房號" onkeypress="if(event.keyCode==13) query()">
+      <input type="text" id="keyword" class="search-input" placeholder="搜尋編號、姓名、房號" oninput="autoQuery()" onkeypress="if(event.keyCode==13) autoQuery(true)">
       <button class="search-clear-btn" onclick="clearSearch()">✕</button>
     </div>
     <button class="btn-search" onclick="query()">搜尋</button>
@@ -509,6 +509,30 @@
       }
     }
     return out;
+  }
+
+  /* 條碼槍是當鍵盤在用：字串直接打進搜尋框，但不一定會補一個 Enter。
+     學員編號固定是 TP + 4 位數字（QR 目錄裡 152 張碼都是這個格式），
+     湊滿就直接查，幹部不用再按一次搜尋。
+     槍真的補了 Enter 也不會查兩次 —— 同一個字串 1.5 秒內只跑一次，
+     否則 showEdit() 會重畫畫面，剛打到一半的備註就沒了。 */
+  var ID_PATTERN = /^TP\d{4}$/i;
+  var lastAutoTxt = '', lastAutoAt = 0;
+
+  function autoQuery(force) {
+    var el = document.getElementById('keyword');
+    var v = el.value.trim();
+    if (!force && !ID_PATTERN.test(v)) return;
+
+    // 先轉大寫再記去重 —— 槍偶爾吐小寫，晚一步轉的話 tp0101 和 TP0101
+    // 會被當成兩個字串，槍再補一個 Enter 就查了兩次
+    if (ID_PATTERN.test(v)) { v = v.toUpperCase(); el.value = v; }
+
+    var now = Date.now();
+    if (v === lastAutoTxt && now - lastAutoAt < 1500) return;
+    lastAutoTxt = v; lastAutoAt = now;
+
+    query();
   }
 
   function query() {
@@ -900,7 +924,8 @@
     }, 50);
   }
 
-  function clearSearch() { document.getElementById('keyword').value = ""; clearUI(); }
+  /* 清掉去重紀錄：按了 ✕ 就是要重來，同一個編號馬上再掃一次要能查得到 */
+  function clearSearch() { document.getElementById('keyword').value = ""; lastAutoTxt = ''; clearUI(); }
 
   /* ══════════ 相機掃描（外部主機版已啟用，支援連續掃描） ══════════ */
 
