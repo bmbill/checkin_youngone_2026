@@ -58,9 +58,17 @@
     .stats-card { background: #ffffff; border: 1px solid var(--m-border); padding: 15px; border-radius: 12px; margin-bottom: 15px; flex-shrink: 0; }
     .progress-bg { background: #f0f0f0; height: 8px; border-radius: 10px; overflow: hidden; width: 100%; margin-bottom: 12px; }
     .progress-bar { background: var(--m-sage); height: 100%; width: 0%; transition: 0.8s; }
-    .title-area { margin: 5px 0 10px 0; }
+    .title-area { margin: 5px 0 10px 0; position: relative; }
+    /* 靠絕對定位擺右上角，標題才能維持置中 */
+    /* 手指按得到（約 44px 高）但顏色刻意壓淡：這是整場活動按不到一次的功能，
+       跟旁邊的操作搶注意力沒有好處。誤觸還有一層 confirm 擋著。 */
+    .btn-logout { position: absolute; right: 0; top: -4px; background: #fff; color: #bbb;
+                  border: 1px solid var(--m-border); border-radius: 8px;
+                  padding: 10px 14px; font-size: 13px; line-height: 1.2; }
     .main-title { color: var(--m-coffee); font-size: 22px; font-weight: bold; text-align: center; letter-spacing: 2px; margin-bottom: 2px; }
-    .sync-time-row { text-align: right; margin-right: 5px; height: 15px; }
+    /* 右邊留出登出鈕的寬度。同步時間也是靠右的，不留的話會被那顆
+       白底按鈕壓掉最上面幾個 pixel。 */
+    .sync-time-row { text-align: right; margin-right: 5px; height: 15px; padding-right: 66px; }
     .sync-time { font-size: 11px; color: #bbb; }
     .sync-time.warning { color: var(--danger); font-weight: bold; animation: blink 1s infinite; }
     .stats-header { display: flex; align-items: baseline; font-size: 15px; color: #666; margin-bottom: 8px; justify-content: center; }
@@ -207,6 +215,7 @@
 
 <div class="container" id="mainContainer">
   <div class="title-area">
+    <button class="btn-logout" onclick="logout()">登出</button>
     <div class="main-title">報到管理系統</div>
     <div class="sync-time-row">
       <span id="pendingTag" class="pending-tag"></span>
@@ -370,6 +379,25 @@
     document.getElementById('gateOverlay').style.display = 'flex';
     document.getElementById('gateOp').value = localStorage.getItem('ck_op') || '';
     document.getElementById('gateMsg').innerText = msg || '';
+  }
+
+  /* 換人用。通行碼和名字都存在這支手機裡，沒有這顆按鈕就只能去清
+     瀏覽器資料才換得掉帳號。 */
+  function logout() {
+    if (pendingQueue.length &&
+        !confirm('還有 ' + pendingQueue.length + ' 筆資料沒送出去。\n' +
+                 '登出不會弄丟它們，但要等有權限的通行碼再登入才會補送。\n\n確定登出？')) return;
+    if (!pendingQueue.length && !confirm('登出後要重新輸入通行碼，確定？')) return;
+
+    localStorage.removeItem('ck_token');
+    localStorage.removeItem('ck_op');
+    /* 連本機名單快取一起清掉。下一個人如果是別組的、又剛好沒訊號，
+       離線時沒辦法跟伺服器確認角色，會直接吃上一個人留下的快取
+       進到這一頁來 —— 清掉就只能等連得上線才進得來。
+       待補送佇列刻意不清：那是還沒送出去的資料，不是登入狀態。 */
+    localStorage.removeItem('ck_roster_v2');
+
+    location.reload();
   }
 
   function enterSystem() {
