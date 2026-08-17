@@ -459,9 +459,12 @@ async function refresh(loud) {
   }
 }
 
-/* 名單多久算新。營期裡名單一天到頭改不了幾次，六小時夠了 ——
-   太短的話每個人每次開 app 都要多等 Apps Script 一兩秒。 */
-const ROSTER_FRESH_MS = 6 * 3600 * 1000;
+/* 名單多久算新。
+   這個數字只影響「背景更新」的頻率，不影響任何人的等待時間 ——
+   手機上已經有名單時，更新是靜靜在背後做的。
+   而且過期之後只有「那段時間內第一個檢查到的人」會真的去抓一次，
+   抓完所有人看到的就都是新的，所以跟有幾支手機無關。 */
+const ROSTER_FRESH_MS = 15 * 60 * 1000;
 
 /**
  * 開啟時自動把名單準備好，關懷員不必記得去點那個選單。
@@ -469,11 +472,18 @@ const ROSTER_FRESH_MS = 6 * 3600 * 1000;
  *   手機上一份都沒有 → 沒名單就填不了單，所以擋著畫面等它抓完
  *   有舊的但過期了   → 舊名單先用，背景靜靜換新，不打斷任何人
  */
+var rosterSyncing = false;
+
 async function maybeSyncRoster(studentsAt) {
+  /* 輪詢每 8 秒跑一次，而同步要好幾秒。沒有這道閘的話，
+     前一次還沒回來就會再發一次 —— 因為 studentsAt 要等同步完成才會變新。 */
+  if (rosterSyncing) return;
   const fresh = S.students.length && studentsAt &&
                 (Date.now() - ts(studentsAt) < ROSTER_FRESH_MS);
   if (fresh) return;
-  await syncRoster({ auto: true, silent: S.students.length > 0 });
+  rosterSyncing = true;
+  try { await syncRoster({ auto: true, silent: S.students.length > 0 }); }
+  finally { rosterSyncing = false; }
 }
 
 async function syncRoster(opt) {
@@ -686,6 +696,9 @@ async function tick() {
   if (document.hidden || !$('gate').classList.contains('hide')) return;
   try {
     const p = await rpc('lv_poll', { p_code: code(), p_op: S.op }, 0);
+    /* 順便看一眼名單新不新。只在開啟時檢查的話，關懷員把頁面一直開著
+       就整晚都不會換到新名單，那個「多久更新一次」的設定也就沒有意義了。 */
+    if (S.role === 'care') maybeSyncRoster(p.studentsAt);
     if (p.rev === S.rev) { setNet(true); return; }
 
     const g = await rpc('lv_leaves_get', { p_code: code(), p_op: S.op }, 0);

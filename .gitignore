@@ -21,3 +21,6 @@ QR/
 *.rar
 *.zip
 *.7z
+
+# Supabase CLI 的暫存檔（存著專案 ref 之類的本機狀態）
+supabase/.temp/

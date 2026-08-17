@@ -328,6 +328,8 @@ begin
   s := lv_scope(r, p_op);
   return jsonb_build_object(
     'rev', lv_rev(),
+    -- 名單上次同步的時間。前端每次輪詢順便看一眼，頁面一直開著也會換到新名單
+    'studentsAt', (select max(updated_at) from lv_students),
     'wait',    (select count(*) from lv_leaves
                  where status = '等待簽核' and (s is null or care = s)),
     'out',     (select count(*) from lv_leaves
