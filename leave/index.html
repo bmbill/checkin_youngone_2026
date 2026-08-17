@@ -431,6 +431,8 @@ async function boot() {
     renderPushBox();
     startPolling();
     startRealtime();
+    // 名單自己會準備好。放在最後、不檔登入 —— 拓不到也還是能看單子
+    if (S.role === 'care') maybeSyncRoster(r.studentsAt);
   } finally {
     busy(false);
   }
@@ -448,9 +450,29 @@ async function refresh(loud) {
   }
 }
 
-async function syncRoster() {
-  if (!confirm('去報到名單抄一份最新的學員清單過來？\n\n只會讀取，不會動到報到名單。')) return;
-  busy(true, '同步名單…');
+/* 名單多久算新。營期裡名單一天到頭改不了幾次，六小時夠了 ——
+   太短的話每個人每次開 app 都要多等 Apps Script 一兩秒。 */
+const ROSTER_FRESH_MS = 6 * 3600 * 1000;
+
+/**
+ * 開啟時自動把名單準備好，關懷員不必記得去點那個選單。
+ * 分兩種情況，因為代價完全不同：
+ *   手機上一份都沒有 → 沒名單就填不了單，所以擋著畫面等它抓完
+ *   有舊的但過期了   → 舊名單先用，背景靜靜換新，不打斷任何人
+ */
+async function maybeSyncRoster(studentsAt) {
+  const fresh = S.students.length && studentsAt &&
+                (Date.now() - ts(studentsAt) < ROSTER_FRESH_MS);
+  if (fresh) return;
+  await syncRoster({ auto: true, silent: S.students.length > 0 });
+}
+
+async function syncRoster(opt) {
+  opt = opt || {};
+  if (!opt.auto && !confirm(`去報到名單抄一份最新的學員清單過來？
+
+只會讀取，不會動到報到名單。`)) return;
+  if (!opt.silent) busy(true, opt.auto ? '下載學員名單…' : '同步名單…');
   try {
     const res = await fetch(CFG.url + '/functions/v1/sync-roster', {
       method: 'POST',
@@ -463,10 +485,18 @@ async function syncRoster() {
     S.students = await rpc('lv_students_get', { p_code: code() });
     try { localStorage.setItem(K.students, JSON.stringify(S.students)); } catch (e) {}
     render();
-    toast(`名單已同步：${r.count} 位學員` + (r.removed ? `，移除 ${r.removed} 位` : ''));
+    if (opt.silent) console.log('名單已在背景更新：' + r.count + ' 位');
+    else toast(`名單已同步：${r.count} 位學員` + (r.removed ? `，移除 ${r.removed} 位` : ''));
   } catch (e) {
-    alert('同步失敗：\n\n' + e.message);
-  } finally { busy(false); }
+    /* 自動同步失敗不能擋住任何人 —— 手上有舊名單就照樣填單，
+       完全沒有名單才需要告訴他怎麼自己重試。 */
+    if (opt.silent) console.warn('背景同步名單失敗（用手機上原本那份）：', e);
+    else if (opt.auto) toast('自動下載名單失敗：' + esc(e.message) +
+                             '<br>可以按右上角「⋯」→ 同步學員名單再試一次', 9000);
+    else alert(`同步失敗：
+
+` + e.message);
+  } finally { if (!opt.silent) busy(false); }
 }
 
 /* ══════════ 匯出 Excel ══════════
@@ -828,8 +858,8 @@ var editingNo = '';    // 空 = 新單；有值 = 正在改哪一張
 
 function formHTML() {
   if (!S.students.length) {
-    return `<div class="warn">還沒有學員名單。請按右上角「⋯」→「同步學員名單」，
-            系統會去報到名單抄一份過來（只讀取，不會動到報到名單）。</div>`;
+    return `<div class="warn">正在下載學員名單（去報到名單抄一份，只讀取不會動到它）。<br>
+            如果一直停在這裡，按右上角「⋯」→「同步學員名單」看看錯誤訊息。</div>`;
   }
   const groups = [...new Set(S.students.map(x => x.grp).filter(Boolean))].sort();
   const now = new Date();
@@ -1104,6 +1134,10 @@ function b64ToU8(s) {
 function renderPushBox() {
   const box = $('pushBox');
   box.innerHTML = '';
+  /* 關懷員不放推播。他送出單子時人就站在學員旁邊看著螢幕，簽核結果
+     8 秒內會跳出來，鎖屏推播對他沒有意義；而 iPhone 那套「加入主畫面」
+     的設定又最容易漏。幾十位關懷員都不必設，營期前的準備就少一大半。 */
+  if (!['lead', 'deputy', 'admin'].includes(S.role)) return;
   if (!CFG.vapidPublicKey) {
     box.innerHTML = `<div class="warn">推播還沒設定，目前靠「頁面開著自動更新＋響鈴」通知。
       把這一頁留在前景就收得到。</div>`;

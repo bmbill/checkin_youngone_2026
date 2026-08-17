@@ -286,9 +286,13 @@ begin
     'leaves', lv_all_json(v_scope), 'rev', lv_rev(), 'serverTime', now());
   -- 學員名單只有關懷員需要（他要填單）。其他角色拿不到，少一份個資在手機上。
   if r.role = 'care' then
-    j := j || jsonb_build_object('students', coalesce(
-      (select jsonb_agg(jsonb_build_object('sid', sid, 'grp', grp, 'name', name, 'room', room)
-              order by grp, name) from lv_students), '[]'::jsonb));
+    /* studentsAt = 名單上次同步的時間。前端靠它判斷要不要自己去抓一份新的，
+       所以關懷員不必記得去點那個選單。 */
+    j := j || jsonb_build_object(
+      'students', coalesce(
+        (select jsonb_agg(jsonb_build_object('sid', sid, 'grp', grp, 'name', name, 'room', room)
+                order by grp, name) from lv_students), '[]'::jsonb),
+      'studentsAt', (select max(updated_at) from lv_students));
   end if;
   return j;
 end $$;
