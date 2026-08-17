@@ -116,6 +116,10 @@ create table if not exists lv_leaves (
   created_at       timestamptz not null default now(),
   updated_at       timestamptz not null default now()
 );
+/* 作廢原因跟退回原因分開兩欄。共用一欄的話，畫面上分不出
+   「大組長不同意」和「行政中心把誤開的單收掉」—— 那是兩件完全不同的事。 */
+alter table lv_leaves add column if not exists void_reason text;
+
 alter table lv_leaves enable row level security;
 revoke all on lv_leaves from anon, authenticated;
 create index if not exists lv_leaves_status_idx on lv_leaves (status);
@@ -133,7 +137,7 @@ select
   care as "關懷員", care_phone as "關懷員電話",
   approver as "簽核人", approver_role as "簽核身分",
   to_char(approved_at at time zone 'Asia/Taipei', 'MM/DD HH24:MI') as "簽核時間",
-  reject_reason as "退回原因",
+  reject_reason as "退回原因", void_reason as "作廢原因",
   to_char(created_at at time zone 'Asia/Taipei', 'MM/DD HH24:MI') as "建立時間",
   log as "紀錄"
 from lv_leaves
@@ -186,7 +190,7 @@ returns jsonb language sql stable as $$
     'out', l.out_at, 'due', l.due_at, 'back', l.back_at,
     'care', l.care, 'carePhone', l.care_phone,
     'approver', l.approver, 'approverRole', l.approver_role, 'approvedAt', l.approved_at,
-    'rejectReason', l.reject_reason, 'log', l.log,
+    'rejectReason', l.reject_reason, 'voidReason', l.void_reason, 'log', l.log,
     'createdAt', l.created_at, 'updatedAt', l.updated_at)
 $$;
 
@@ -560,6 +564,48 @@ begin
 end $$;
 
 
+/* ══════════ 作廢（行政中心） ══════════ */
+/**
+ * 誤開的單、營期前的測試單，需要一個乾淨的出口。
+ *
+ * 為什麼是「作廢」而不是真的刪除：學員外出期間萬一出事，那張單是唯一的
+ * 書面證據。真的把那一列拿掉之後，誰在幾點、為什麼刪的，沒有任何人查得回來。
+ * 所以這裡跟報到系統的關懷員備註同一個原則 —— 劃掉，不是拿掉。
+ *
+ * 任何狀態都可以作廢，包含已經簽核放行的「請假中」——
+ * 那正是最需要它的情況：關懷員自己不能取消已放行的單，
+ * 沒有這一支的話唯一的出路是按「銷假」，
+ * 而那會留下一筆學員根本沒出去過的「完成銷假」紀錄。
+ */
+create or replace function lv_void(p_code text, p_no text, p_op text, p_reason text)
+returns jsonb language plpgsql security definer set search_path = public, extensions as $$
+declare r lv_codes; l lv_leaves; cur lv_leaves;
+begin
+  r := lv_who(p_code);
+  perform lv_need(r, array['admin'], '作廢請假單');
+  if btrim(coalesce(p_op, ''))     = '' then raise exception '沒有填你的名字'; end if;
+  if btrim(coalesce(p_reason, '')) = '' then
+    raise exception '作廢一定要填原因。這張單會留在紀錄裡，之後看到的人要知道為什麼';
+  end if;
+
+  select * into cur from lv_leaves where no = p_no;
+  if cur.no is null then raise exception '找不到單號 %', p_no; end if;
+  if cur.status = '已取消' then
+    raise exception '這張單已經是「已取消」了'; end if;
+
+  update lv_leaves set
+    status = '已取消', void_reason = left(btrim(p_reason), 200),
+    overdue_notified = true,          -- 作廢掉的單不該再跳逾時提醒
+    updated_at = now(),
+    log = lv_log(log, p_op, r.label, '作廢（原狀態：' || cur.status || '）：' || btrim(p_reason))
+   where no = p_no and status <> '已取消'
+  returning * into l;
+
+  if l.no is null then raise exception '這張單剛剛被別人處理過了，請重新整理'; end if;
+  return lv_json(l);
+end $$;
+
+
 /* ══════════ 推播裝置 ══════════ */
 
 create or replace function lv_device_add(p_code text, p jsonb)
@@ -702,6 +748,13 @@ begin
     v_body  := l.grp || ' ' || l.name || '　' || coalesce(l.approver, '') || '：' ||
                coalesce(l.reject_reason, '');
 
+  elsif p_event = 'voided' then
+    perform lv_need(r, array['admin'], '發出作廢通知');
+    if l.status <> '已取消' then return jsonb_build_object('skip', true); end if;
+    v_roles := array['care'];
+    v_title := '請假單已被作廢';
+    v_body  := l.grp || ' ' || l.name || '　' || coalesce(l.void_reason, '');
+
   elsif p_event = 'closed' then
     perform lv_need(r, array['care', 'admin'], '發出銷假通知');
     if l.status <> '完成銷假' then return jsonb_build_object('skip', true); end if;
@@ -776,7 +829,7 @@ begin
     'lv_poll(text,text)',
     'lv_create(text,jsonb)', 'lv_update(text,jsonb)', 'lv_cancel(text,text,text)',
     'lv_approve(text,text,text)', 'lv_reject(text,text,text,text)',
-    'lv_close(text,text,text,text)',
+    'lv_close(text,text,text,text)', 'lv_void(text,text,text,text)',
     'lv_device_add(text,jsonb)', 'lv_device_del(text,text)'
   ] loop
     execute format('grant execute on function %s to anon, authenticated', f);

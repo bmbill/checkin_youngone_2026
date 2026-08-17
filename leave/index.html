@@ -498,6 +498,7 @@ const EXPORT_COLS = [
   ['簽核身分',     x => x.approverRole],
   ['簽核時間',     x => full(x.approvedAt)],
   ['退回原因',     x => x.rejectReason],
+  ['作廢原因',     x => x.voidReason],
   ['建立時間',     x => full(x.createdAt)],
   ['紀錄',         x => (Array.isArray(x.log) ? x.log : [])
                           .map(e => `${e.at} ${e.who}(${e.role}) ${e.what}`).join('　／　')]
@@ -575,7 +576,7 @@ async function exportExcel() {
     ws['!cols'] = [
       {wch:8},{wch:10},{wch:9},{wch:11},{wch:11},{wch:13},{wch:8},{wch:16},
       {wch:17},{wch:17},{wch:17},{wch:9},{wch:10},{wch:13},{wch:10},{wch:10},
-      {wch:17},{wch:20},{wch:17},{wch:60}
+      {wch:17},{wch:20},{wch:20},{wch:17},{wch:60}
     ];
     ws['!autofilter'] = { ref: XLSX.utils.encode_range(
       { s: { c: 0, r: 0 }, e: { c: EXPORT_COLS.length - 1, r: aoa.length - 1 } }) };
@@ -686,7 +687,7 @@ const TABS = {
   care:   [['new','填新單'], ['mine','單子狀況']],
   lead:   [['wait','待簽核'], ['out','請假中'], ['done','已結束']],
   deputy: [['wait','待簽核'], ['out','請假中'], ['done','已結束']],
-  admin:  [['wait','等待核可'], ['out','請假中'], ['done','完成銷假'], ['all','全部']]
+  admin:  [['wait','等待核可'], ['out','請假中'], ['done','已結束'], ['all','全部']]
 };
 
 function filterFor(tab) {
@@ -779,6 +780,9 @@ function cardHTML(x) {
   if (x.rejectReason) {
     rows += `<div class="why"><b>${esc(x.approver)} 退回：</b>${esc(x.rejectReason)}</div>`;
   }
+  if (x.voidReason) {
+    rows += `<div class="why"><b>行政中心作廢：</b>${esc(x.voidReason)}</div>`;
+  }
 
   const open = S.openLog[x.no];
   const log = Array.isArray(x.log) ? x.log : [];
@@ -803,6 +807,12 @@ function actionsHTML(x) {
   }
   if (x.status === ST.OUT && ['care', 'admin'].includes(S.role)) {
     h += `<button class="btn sm" onclick="doClose('${x.no}')">學員已回營 → 銷假</button>`;
+  }
+  /* 作廢對任何狀態都開放（含已放行的「請假中」）—— 那正是最需要它的情況。
+     顏色刻意用淡灰而不是紅色：這是整場活動按不到幾次的功能，
+     跟旁邊的簽核、銷假搶注意力沒有好處。誤觸還有一層必填原因擋著。 */
+  if (S.role === 'admin' && x.status !== ST.CANCEL) {
+    h += `<button class="btn sm grey" onclick="doVoid('${x.no}')">作廢這張單（要填原因）</button>`;
   }
   if ([ST.WAIT, ST.REJECT].includes(x.status) && S.role === 'care') {
     h += `<div class="row2">
@@ -1047,6 +1057,21 @@ function doClose(no) {
   if (!back) { alert('時間格式看不懂，請照 ' + def + ' 這個樣子填'); return; }
   return act('銷假', 'lv_close', { p_code: code(), p_no: no, p_op: S.op, p_back: back },
       'closed', no, `已完成銷假：${esc(x.name)}`);
+}
+
+function doVoid(no) {
+  const x = S.leaves.find(l => l.no === no); if (!x) return;
+  const why = prompt(`作廢 ${x.grp} ${x.name} 的請假單 ${no}（目前是「${x.status}」）。
+
+` +
+    `作廢不會刪掉資料 —— 這張單會留在紀錄和匯出裡，狀態變成「已取消」。
+
+請填原因：`);
+  if (why === null) return;
+  if (!why.trim()) { alert('作廢一定要填原因'); return; }
+  return act('作廢', 'lv_void',
+             { p_code: code(), p_no: no, p_op: S.op, p_reason: why.trim() },
+             'voided', no, `已作廢 ${esc(no)}`);
 }
 
 function doCancel(no) {
