@@ -15,11 +15,12 @@
  * 填法見 leave/README.md 步驟 2。
  */
 window.CFG = {
-  url:     '',   // 例：https://abcdefghijklmn.supabase.co
-  anonKey: '',   // Supabase 後台 → Project Settings → API → anon public
+  url:     'https://qkakfiyyyibcyvzbxhhd.supabase.co',
+  // 新版金鑰格式（sb_publishable_…）。後台 → Project Settings → API → Publishable key
+  anonKey: 'sb_publishable_1E6KWGtQMKU3CSTLFFj2RA_ZlYXQ-Gf',
 
   // tools/gen_vapid.mjs 產生的公鑰。留空 = 推播停用，系統改用「頁面開著＋響鈴」通知
-  vapidPublicKey: '',
+  vapidPublicKey: 'BGfOIyW2-LxWqEQ52ktb9kt8JYVqawsjIKCGKgFdV30GotxtU2YmAgceIZb8EhJzqI-qBwPgXYW9OKXh7CTqfs0',
 
   // 即時訂閱（新單當場跳出來）。設 false 就只用輪詢，慢 8 秒但更省電
   realtime: true

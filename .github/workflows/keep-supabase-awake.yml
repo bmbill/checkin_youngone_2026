@@ -33,10 +33,18 @@ jobs:
             echo "還沒設定 SUPABASE_URL / SUPABASE_ANON_KEY，跳過。"
             exit 0
           fi
-          code=$(curl -s -o /dev/null -w '%{http_code}' \
-                   -H "apikey: $KEY" "$URL/rest/v1/")
-          echo "HTTP $code"
-          if [ "$code" != "200" ]; then
-            echo "::error::Supabase 沒有正常回應（可能已經被暫停，請到後台按 Restore）"
-            exit 1
+          # 故意用錯的通行碼呼叫 lv_poll。這比戳 /rest/v1/ 好：
+          #   · /rest/v1/ 對 anon 是關著的（新版金鑰格式下一律 401），驗不出東西
+          #   · 這一下會真的進到 Postgres 執行我們的函式，
+          #     回 P0001「通行碼錯誤」就同時證明「資料庫醒著」而且「函式還在」
+          body=$(curl -s -m 30 -X POST "$URL/rest/v1/rpc/lv_poll" \
+                   -H "apikey: $KEY" -H "Authorization: Bearer $KEY" \
+                   -H "Content-Type: application/json" \
+                   -d '{"p_code":"keepalive-probe"}')
+          echo "回應：$body"
+          if echo "$body" | grep -q 'P0001'; then
+            echo "Supabase 正常。"
+            exit 0
           fi
+          echo "::error::Supabase 沒有正常回應。可能已經被暫停（到後台按 Restore），或 schema 被改掉了。"
+          exit 1
