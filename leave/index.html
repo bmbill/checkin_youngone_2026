@@ -383,7 +383,9 @@ async function doLogin() {
 function openMenu() {
   const items = [
     ['重新整理', 'refresh(true)'],
-    (S.role === 'care' || S.role === 'admin') ? ['同步學員名單（從報到名單抄一份）', 'syncRoster()'] : null,
+    /* 手動同步只留給行政中心。名單是他在管的，而且改完會想馬上生效。
+       關懷員不放 —— 他的名單自己會準備好，真的抓不到時卡片上有「再試一次」。 */
+    S.role === 'admin' ? ['同步學員名單（從報到名單抄一份）', 'syncRoster()'] : null,
     ['lead', 'deputy', 'admin'].includes(S.role)
       ? [`匯出 Excel（全部 ${S.leaves.length} 張單）`, 'exportExcel()'] : null,
     ['登出（換人用這支手機）', 'logout()'],
@@ -921,9 +923,6 @@ function formHTML() {
 
     <label>關懷員（你）</label>
     <input type="text" id="fCare" value="${esc(S.op)}" disabled>
-    <div style="font-size:12px;color:var(--c-dim);margin-top:4px">
-      這一欄鎖住是刻意的：單子要靠這個名字才找得回來。在這裡改成別的名字，
-      送出後你自己就看不到這張單了。要換人請登出重新登入。</div>
     <label class="req">關懷員電話</label>
     <input type="tel" id="fCarePhone" inputmode="tel" value="${esc(S.myPhone)}">
 
