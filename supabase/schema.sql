@@ -291,7 +291,9 @@ begin
     j := j || jsonb_build_object(
       'students', coalesce(
         (select jsonb_agg(jsonb_build_object('sid', sid, 'grp', grp, 'name', name, 'room', room)
-                order by grp, name) from lv_students), '[]'::jsonb),
+                -- 依錄取編號排。編號不會顯示在畫面上，但同一組裡的順序跟名單一致，
+                -- 關懷員拿著紙本名單對照時比較好找人
+                order by sid) from lv_students), '[]'::jsonb),
       'studentsAt', (select max(updated_at) from lv_students));
   end if;
   return j;
@@ -313,7 +315,7 @@ begin
   r := lv_who(p_code);
   perform lv_need(r, array['care', 'admin'], '看學員名單');
   return coalesce((select jsonb_agg(jsonb_build_object('sid', sid, 'grp', grp, 'name', name, 'room', room)
-                          order by grp, name) from lv_students), '[]'::jsonb);
+                          order by sid) from lv_students), '[]'::jsonb);
 end $$;
 
 /* 輪詢用。只回一個 rev 和幾個數字，前端每 8 秒打一次都不心疼。

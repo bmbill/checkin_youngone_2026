@@ -203,7 +203,7 @@ const K = { code:'lv_code', op:'lv_op', phone:'lv_phone', students:'lv_students'
 var S = {
   role:'', label:'', op:'', myPhone:'',
   leaves:[], students:[], rev:'', tab:'',
-  openLog:{}, live:false
+  openLog:{}, live:false, rosterError:''
 };
 
 /* ══════════ 傳輸層 ══════════
@@ -431,8 +431,15 @@ async function boot() {
     renderPushBox();
     startPolling();
     startRealtime();
-    // 名單自己會準備好。放在最後、不檔登入 —— 拓不到也還是能看單子
-    if (S.role === 'care') maybeSyncRoster(r.studentsAt);
+    /* 名單自己會準備好。
+       完全沒名單時要 await —— 沒名單就填不了單，而且 Edge Function 冷啟動
+       加上 Apps Script 本來就要幾秒。不 await 的話下面的 finally 會馬上把
+       「處理中」關掉，畫面看起來像卡住了，人就會去亂按。
+       手機上已經有一份的時候就不擋，背景換新。 */
+    if (S.role === 'care') {
+      if (!S.students.length) await maybeSyncRoster(r.studentsAt);
+      else maybeSyncRoster(r.studentsAt);
+    }
   } finally {
     busy(false);
   }
@@ -485,17 +492,20 @@ async function syncRoster(opt) {
     S.students = await rpc('lv_students_get', { p_code: code() });
     try { localStorage.setItem(K.students, JSON.stringify(S.students)); } catch (e) {}
     render();
+    S.rosterError = '';
     if (opt.silent) console.log('名單已在背景更新：' + r.count + ' 位');
     else toast(`名單已同步：${r.count} 位學員` + (r.removed ? `，移除 ${r.removed} 位` : ''));
   } catch (e) {
     /* 自動同步失敗不能擋住任何人 —— 手上有舊名單就照樣填單，
        完全沒有名單才需要告訴他怎麼自己重試。 */
+    if (!S.students.length) S.rosterError = e.message;
     if (opt.silent) console.warn('背景同步名單失敗（用手機上原本那份）：', e);
     else if (opt.auto) toast('自動下載名單失敗：' + esc(e.message) +
                              '<br>可以按右上角「⋯」→ 同步學員名單再試一次', 9000);
     else alert(`同步失敗：
 
 ` + e.message);
+    if (S.rosterError) render();
   } finally { if (!opt.silent) busy(false); }
 }
 
@@ -771,10 +781,8 @@ function listHTML(list) {
     /* 名字是手打的，而系統就是靠這個字串認人。所以要把「你現在是誰」
        明白寫在畫面上 —— 換手機打成「林 安」就會看不到「林安」開的單，
        而且那時候畫面會是一片空白，沒有這行字的話沒人猜得到為什麼。 */
-    head += `<div class="card" style="padding:11px 12px;font-size:13px;line-height:1.7">
-      這裡只顯示<b>「${esc(S.op)}」</b>開出來的單。<br>
-      <span style="color:var(--c-dim)">名字打得不一樣就會看不到（例如多一個空格）。
-      換手機時請確認打法一致；要換人請用右上角「⋯」登出。</span></div>`;
+    head += `<div class="card" style="padding:11px 12px;font-size:13px">
+      這裡只顯示<b>「${esc(S.op)}」</b>開出來的單。</div>`;
   }
   if (S.role === 'admin' && S.tab === 'wait' && list.length) {
     head += `<div class="warn">有 ${list.length} 張單在等大組長／副大組長簽核。
@@ -858,8 +866,15 @@ var editingNo = '';    // 空 = 新單；有值 = 正在改哪一張
 
 function formHTML() {
   if (!S.students.length) {
-    return `<div class="warn">正在下載學員名單（去報到名單抄一份，只讀取不會動到它）。<br>
-            如果一直停在這裡，按右上角「⋯」→「同步學員名單」看看錯誤訊息。</div>`;
+    /* 失敗原因要留在畫面上。用會自動消失的提示條的話，
+       名單抓不到的人只會看到一張空白的卡，不知道發生什麼事、也不知道能做什麼。 */
+    if (S.rosterError) {
+      return `<div class="warn bad">學員名單下載失敗：${esc(S.rosterError)}<br>
+        <button class="btn sm" style="margin-top:8px;background:var(--c-main)"
+                onclick="syncRoster()">再試一次</button></div>`;
+    }
+    return `<div class="warn">正在下載學員名單…（去報到名單抄一份，只讀取不會動到它。
+            第一次要幾秒，請稍等）</div>`;
   }
   const groups = [...new Set(S.students.map(x => x.grp).filter(Boolean))].sort();
   const now = new Date();
@@ -882,9 +897,9 @@ function formHTML() {
     <input type="text" id="fRoom" placeholder="會依名單自動帶入，可以改">
 
     <label class="req">學員行動電話</label>
-    <input type="tel" id="fPhone" inputmode="tel" placeholder="報到名單上沒有，請當場問學員">
+    <input type="tel" id="fPhone" inputmode="tel">
 
-    <label>事由（選填，但大組長會靠這個判斷）</label>
+    <label>事由（選填）</label>
     <input type="text" id="fReason" placeholder="例：看牙醫、家人來訪">
 
     <label class="req">外出時間</label>
@@ -922,8 +937,12 @@ function formHTML() {
 /* 學員選單依組別過濾。150 位擺在一個下拉裡，手機上要滑很久還容易點錯人。 */
 function fillStudents() {
   const g = $('fGrp').value;
+  /* 依錄取編號排序，但畫面上只顯示姓名。伺服器那邊已經排好了，
+     這裡再排一次是因為名單也可能是從手機的舊快取讀出來的。 */
   $('fName').innerHTML = '<option value="">請選學員</option>' +
-    S.students.filter(x => x.grp === g).map(x =>
+    S.students.filter(x => x.grp === g)
+      .sort((a, b) => String(a.sid).localeCompare(String(b.sid)))
+      .map(x =>
       `<option value="${esc(x.name)}" data-sid="${esc(x.sid)}" data-room="${esc(x.room)}">${esc(x.name)}</option>`
     ).join('');
   $('fRoom').value = '';
