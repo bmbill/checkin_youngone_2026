@@ -384,6 +384,8 @@ function openMenu() {
   const items = [
     ['重新整理', 'refresh(true)'],
     (S.role === 'care' || S.role === 'admin') ? ['同步學員名單（從報到名單抄一份）', 'syncRoster()'] : null,
+    ['lead', 'deputy', 'admin'].includes(S.role)
+      ? [`匯出 Excel（全部 ${S.leaves.length} 張單）`, 'exportExcel()'] : null,
     ['登出（換人用這支手機）', 'logout()'],
     [`關閉　${esc(S.label)}　${esc(S.op)}　${APP_VERSION}`, 'closeMenu()']
   ].filter(Boolean);
@@ -465,6 +467,143 @@ async function syncRoster() {
   } catch (e) {
     alert('同步失敗：\n\n' + e.message);
   } finally { busy(false); }
+}
+
+/* ══════════ 匯出 Excel ══════════
+   大組長、副大組長、行政中心用。資料本來就已經在手機上了（這三種身分
+   拿到的是全部單子），所以匯出完全在本機做，不必再打一次伺服器。
+
+   為什麼產真正的 .xlsx 而不是 CSV：Excel 會把「0912345678」當成數字，
+   開頭那個 0 會被無聲吃掉。請假單上的電話就是要拿來打的，
+   被吃掉等於白存 —— .xlsx 可以把那幾欄明確標成文字。
+   萬一 CDN 連不到（營期現場訊號差），下面會自動退回 CSV，
+   並在電話欄用 ="…" 把 0 保住。 */
+
+const EXPORT_COLS = [
+  ['單號',         x => x.no],
+  ['狀態',         x => x.status],
+  ['組別',         x => x.grp],
+  ['學員姓名',     x => x.name],
+  ['錄取編號',     x => x.sid],
+  ['行動電話',     x => x.phone,     'text'],
+  ['房號',         x => x.room,      'text'],
+  ['事由',         x => x.reason],
+  ['外出時間',     x => full(x.out)],
+  ['預計回來時間', x => full(x.due)],
+  ['實際回來時間', x => full(x.back)],
+  ['逾時分鐘',     x => lateMins(x)],
+  ['關懷員',       x => x.care],
+  ['關懷員電話',   x => x.carePhone, 'text'],
+  ['簽核人',       x => x.approver],
+  ['簽核身分',     x => x.approverRole],
+  ['簽核時間',     x => full(x.approvedAt)],
+  ['退回原因',     x => x.rejectReason],
+  ['建立時間',     x => full(x.createdAt)],
+  ['紀錄',         x => (Array.isArray(x.log) ? x.log : [])
+                          .map(e => `${e.at} ${e.who}(${e.role}) ${e.what}`).join('　／　')]
+];
+
+/* 匯出用完整年份，而且零開頭補齊 —— 這樣在 Excel 裡直接排序就是正確的時間順序 */
+function full(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d)) return String(iso);
+  const p = n => ('0' + n).slice(-2);
+  return `${d.getFullYear()}/${p(d.getMonth()+1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/* 逾時幾分鐘。已銷假的用實際回來時間算，還在外面的用現在算。
+   行政中心事後檢視時，這一欄比自己拿兩個時間相減快得多。 */
+function lateMins(x) {
+  const due = ts(x.due);
+  if (!due) return '';
+  const end = x.status === ST.DONE ? ts(x.back) : (x.status === ST.OUT ? Date.now() : 0);
+  if (!end) return '';
+  const m = Math.round((end - due) / 60000);
+  return m > 1 ? String(m) : '';
+}
+
+function stamp() {
+  const d = new Date(), p = n => ('0' + n).slice(-2);
+  return `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
+}
+
+/* 產 Excel 的元件要用到才載。營期現場訊號差，開頁面就先抓一支 400KB 的
+   外部 JS 太脆弱 —— 而且絕大多數人整場都不會按到匯出。 */
+function loadScript(src) {
+  return new Promise((ok, no) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = ok;
+    s.onerror = () => no(new Error('載入失敗：' + src));
+    document.head.appendChild(s);
+  });
+}
+
+function saveBlob(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
+
+async function exportExcel() {
+  if (!S.leaves.length) { toast('目前沒有任何單子可以匯出'); return; }
+  const rows = sorted(S.leaves.slice());
+  const name = `卓青營請假單_${stamp()}`;
+
+  busy(true, '產生檔案…');
+  try {
+    if (!window.XLSX) {
+      await loadScript('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js');
+    }
+    const aoa = [EXPORT_COLS.map(c => c[0])].concat(
+      rows.map(x => EXPORT_COLS.map(c => String(c[1](x) == null ? '' : c[1](x)))));
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+
+    /* aoa_to_sheet 已經把每一格當字串了，但電話欄再明確標一次 t:'s'，
+       免得哪天換了版本又把純數字的電話猜成數值。 */
+    EXPORT_COLS.forEach((c, i) => {
+      if (c[2] !== 'text') return;
+      for (let r = 1; r < aoa.length; r++) {
+        const cell = ws[XLSX.utils.encode_cell({ c: i, r: r })];
+        if (cell) { cell.t = 's'; cell.z = '@'; }
+      }
+    });
+    ws['!cols'] = [
+      {wch:8},{wch:10},{wch:9},{wch:11},{wch:11},{wch:13},{wch:8},{wch:16},
+      {wch:17},{wch:17},{wch:17},{wch:9},{wch:10},{wch:13},{wch:10},{wch:10},
+      {wch:17},{wch:20},{wch:17},{wch:60}
+    ];
+    ws['!autofilter'] = { ref: XLSX.utils.encode_range(
+      { s: { c: 0, r: 0 }, e: { c: EXPORT_COLS.length - 1, r: aoa.length - 1 } }) };
+    ws['!freeze'] = { xSplit: 0, ySplit: 1 };
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '請假單');
+    XLSX.writeFile(wb, name + '.xlsx');
+    toast(`已匯出 ${rows.length} 張單`);
+
+  } catch (e) {
+    console.warn('xlsx 產不出來，改用 CSV：', e);
+    const cell = (v, isText) => {
+      const s = String(v == null ? '' : v);
+      // ="…" 是為了讓 Excel 把 0 開頭的電話當成文字，不要吃掉那個 0
+      const body = isText && s ? '="' + s.replace(/"/g, '""') + '"'
+                               : '"' + s.replace(/"/g, '""') + '"';
+      return body;
+    };
+    const lines = [EXPORT_COLS.map(c => cell(c[0])).join(',')].concat(
+      rows.map(x => EXPORT_COLS.map(c => cell(c[1](x), c[2] === 'text')).join(',')));
+    // ﻿ 是 UTF-8 BOM。沒有它，Excel 在中文 Windows 上會把整份中文開成亂碼
+    saveBlob(new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' }),
+             name + '.csv');
+    toast(`連不到 Excel 元件，已改匯出 CSV（${rows.length} 張單）`, 8000);
+  } finally {
+    busy(false);
+  }
 }
 
 /* ══════════ 更新：即時訂閱 + 輪詢保底 ══════════
