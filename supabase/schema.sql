@@ -126,8 +126,14 @@ create index if not exists lv_leaves_status_idx on lv_leaves (status);
 create index if not exists lv_leaves_updated_idx on lv_leaves (updated_at desc);
 
 /* 給行政中心在後台 Table Editor 直接看的：時間換成台北時間、欄名中文。
-   後台預設用 UTC 顯示 timestamptz，直接看 lv_leaves 會整批差 8 小時。 */
-create or replace view "lv_單子" as
+   後台預設用 UTC 顯示 timestamptz，直接看 lv_leaves 會整批差 8 小時。
+
+   先 drop 再建，不用 create or replace：後者只准在最後面加欄位，
+   在中間插一欄（例如把「作廢原因」放在「退回原因」旁邊）會被當成
+   要把後面每一欄改名，直接報 42P16 錯。這個檢視表本身沒有資料，
+   砍掉重建沒有任何損失，而欄位順序要能照人看得順的方式排。 */
+drop view if exists "lv_單子";
+create view "lv_單子" as
 select
   no as "單號", status as "狀態", grp as "組別", name as "學員姓名",
   phone as "行動電話", room as "房號", reason as "事由",
