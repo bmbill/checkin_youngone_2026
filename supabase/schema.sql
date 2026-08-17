@@ -206,10 +206,39 @@ returns text language sql stable security definer set search_path = public as $$
   select coalesce(max(updated_at)::text, '-') || '/' || count(*)::text from lv_leaves
 $$;
 
-create or replace function lv_all_json()
+/**
+ * 關懷員只看得到「自己這個名字」開出來的單。
+ *
+ * p_care 給 null = 全部（大組長、副大組長、行政中心）。
+ * 給名字 = 只有 care 等於這個名字的單。
+ *
+ * 這個過濾一定要做在資料庫，不能只在前端少顯示幾張 ——
+ * 前端過濾的話，每支關懷員的手機還是把全體學員的姓名和電話下載了一份。
+ * 擋在這裡，那支手機就真的只拿到自己那幾張單。
+ */
+create or replace function lv_all_json(p_care text)
 returns jsonb language sql stable security definer set search_path = public as $$
-  select coalesce(jsonb_agg(lv_json(l) order by l.created_at desc), '[]'::jsonb) from lv_leaves l
+  select coalesce(jsonb_agg(lv_json(l) order by l.created_at desc), '[]'::jsonb)
+    from lv_leaves l
+   where p_care is null or l.care = p_care
 $$;
+
+/**
+ * 這個身分該看到誰的單。
+ *
+ * 關懷員 → 只有他登入時打的那個名字；其他角色 → 全部。
+ * 名字是手打的，所以打法不一樣就會看不到自己先前開的單 ——
+ * 這是「不發清單、維持手打」必然的代價，前端會把這件事寫在畫面上提醒。
+ */
+create or replace function lv_scope(r lv_codes, p_op text)
+returns text language plpgsql immutable as $$
+begin
+  if r.role <> 'care' then return null; end if;
+  if btrim(coalesce(p_op, '')) = '' then
+    raise exception '請先填你的名字，關懷員是靠名字認自己的單子的';
+  end if;
+  return btrim(p_op);
+end $$;
 
 /* 時間一律由前端送 ISO 字串（含 +08:00 時區）過來。
    缺時區的字串會被當成資料庫時區解讀，那就會整批差八小時。 */
@@ -228,14 +257,23 @@ end $$;
 
 /* ══════════ 讀取 ══════════ */
 
-create or replace function lv_bootstrap(p_code text)
+/* 這三支加了「你是誰」這個參數，舊的單參數版本一定要砍掉。
+   留著的話它們還掛在 anon 的開放清單上，關懷員照樣叫得到「回傳全部單子」那一版，
+   等於這整個區隔完全沒有效果。 */
+drop function if exists lv_bootstrap(text);
+drop function if exists lv_leaves_get(text);
+drop function if exists lv_poll(text);
+drop function if exists lv_all_json();
+
+create or replace function lv_bootstrap(p_code text, p_op text)
 returns jsonb language plpgsql security definer set search_path = public, extensions as $$
-declare r lv_codes; j jsonb;
+declare r lv_codes; j jsonb; v_scope text;
 begin
   r := lv_who(p_code);
+  v_scope := lv_scope(r, p_op);
   j := jsonb_build_object(
-    'role', r.role, 'label', r.label,
-    'leaves', lv_all_json(), 'rev', lv_rev(), 'serverTime', now());
+    'role', r.role, 'label', r.label, 'scope', v_scope,
+    'leaves', lv_all_json(v_scope), 'rev', lv_rev(), 'serverTime', now());
   -- 學員名單只有關懷員需要（他要填單）。其他角色拿不到，少一份個資在手機上。
   if r.role = 'care' then
     j := j || jsonb_build_object('students', coalesce(
@@ -245,12 +283,13 @@ begin
   return j;
 end $$;
 
-create or replace function lv_leaves_get(p_code text)
+create or replace function lv_leaves_get(p_code text, p_op text)
 returns jsonb language plpgsql security definer set search_path = public, extensions as $$
 declare r lv_codes;
 begin
   r := lv_who(p_code);
-  return jsonb_build_object('leaves', lv_all_json(), 'rev', lv_rev(), 'serverTime', now());
+  return jsonb_build_object('leaves', lv_all_json(lv_scope(r, p_op)),
+                            'rev', lv_rev(), 'serverTime', now());
 end $$;
 
 create or replace function lv_students_get(p_code text)
@@ -263,17 +302,22 @@ begin
                           order by grp, name) from lv_students), '[]'::jsonb);
 end $$;
 
-/* 輪詢用。只回一個 rev 和幾個數字，前端每 8 秒打一次都不心疼。 */
-create or replace function lv_poll(p_code text)
+/* 輪詢用。只回一個 rev 和幾個數字，前端每 8 秒打一次都不心疼。
+   關懷員拿到的數字也只算他自己的單。 */
+create or replace function lv_poll(p_code text, p_op text)
 returns jsonb language plpgsql security definer set search_path = public, extensions as $$
-declare r lv_codes;
+declare r lv_codes; s text;
 begin
   r := lv_who(p_code);
+  s := lv_scope(r, p_op);
   return jsonb_build_object(
     'rev', lv_rev(),
-    'wait',    (select count(*) from lv_leaves where status = '等待簽核'),
-    'out',     (select count(*) from lv_leaves where status = '請假中'),
-    'overdue', (select count(*) from lv_leaves where status = '請假中' and due_at < now()),
+    'wait',    (select count(*) from lv_leaves
+                 where status = '等待簽核' and (s is null or care = s)),
+    'out',     (select count(*) from lv_leaves
+                 where status = '請假中'   and (s is null or care = s)),
+    'overdue', (select count(*) from lv_leaves
+                 where status = '請假中'   and due_at < now() and (s is null or care = s)),
     'serverTime', now());
 end $$;
 
@@ -331,6 +375,25 @@ end $$;
 /* ══════════ 修改 / 取消（關懷員） ══════════ */
 
 /**
+ * 「這張單是不是你開的」。
+ *
+ * 只擋關懷員 —— 行政中心在服務台代為銷假是刻意留的逃生門：
+ * 學員回營時開單的關懷員可能正在忙、手機沒電、或已經換班，
+ * 沒有這個出口的話那張單就永遠掛在「請假中」，沒有人能收尾。
+ *
+ * 名字是手打的，所以訊息要講清楚為什麼不給動，以及怎麼補救。
+ */
+create or replace function lv_mine(r lv_codes, l lv_leaves, p_op text, p_what text)
+returns void language plpgsql immutable as $$
+begin
+  if r.role <> 'care' then return; end if;
+  if l.care = btrim(coalesce(p_op, '')) then return; end if;
+  raise exception '這張單是「%」開的，只有他本人能%。（如果這就是你，請登出後用一模一樣的名字重新登入；急件請找行政中心）',
+                  l.care, p_what;
+end $$;
+
+
+/**
  * 只有「等待簽核」和「已退回」的單能改。
  * 簽核過的單不給改是刻意的：大組長同意的是他當時看到的時間和事由，
  * 事後被改掉那個簽核就沒有意義了。真的要改就取消重開一張。
@@ -350,6 +413,7 @@ begin
 
   select * into cur from lv_leaves where no = p ->> 'no';
   if cur.no is null then raise exception '找不到單號 %', p ->> 'no'; end if;
+  perform lv_mine(r, cur, v_op, '修改');
   if cur.status not in ('等待簽核', '已退回') then
     raise exception '這張單現在是「%」，不能修改。%', cur.status,
       case when cur.status = '請假中' then '已經簽核放行的單如果要改，請取消後重開一張。' else '' end;
@@ -383,17 +447,23 @@ begin
   perform lv_need(r, array['care'], '取消請假單');
   if btrim(coalesce(p_op, '')) = '' then raise exception '沒有填你的名字'; end if;
 
+  /* 先讀出來檢查，再更新。原本是「更新不到再回頭查原因」，
+     但加了「是不是你開的」之後，那種寫法會把「別人的單」和
+     「狀態不對」混成同一個錯誤，現場看不出到底是哪一種。 */
+  select * into cur from lv_leaves where no = p_no;
+  if cur.no is null then raise exception '找不到單號 %', p_no; end if;
+  perform lv_mine(r, cur, p_op, '取消');
+  if cur.status not in ('等待簽核', '已退回') then
+    raise exception '這張單現在是「%」，不能取消。%', cur.status,
+      case when cur.status = '請假中' then '學員已經放行了，請等他回營再銷假。' else '' end;
+  end if;
+
   update lv_leaves set status = '已取消', updated_at = now(),
          log = lv_log(log, p_op, r.label, '取消請假單')
    where no = p_no and status in ('等待簽核', '已退回')
   returning * into l;
 
-  if l.no is null then
-    select * into cur from lv_leaves where no = p_no;
-    if cur.no is null then raise exception '找不到單號 %', p_no; end if;
-    raise exception '這張單現在是「%」，不能取消。%', cur.status,
-      case when cur.status = '請假中' then '學員已經放行了，請等他回營再銷假。' else '' end;
-  end if;
+  if l.no is null then raise exception '這張單剛剛被別人處理過了，請重新整理'; end if;
   return lv_json(l);
 end $$;
 
@@ -467,6 +537,7 @@ begin
 
   select * into cur from lv_leaves where no = p_no;
   if cur.no is null then raise exception '找不到單號 %', p_no; end if;
+  perform lv_mine(r, cur, p_op, '銷假');
   if cur.status = '完成銷假' then
     raise exception '這張單已經銷假了（實際回來 %），不用再銷一次。',
       to_char(cur.back_at at time zone 'Asia/Taipei', 'MM/DD HH24:MI');
@@ -554,9 +625,12 @@ begin
              ' 分未回營。關懷員 ' || care || ' ' || care_phone,
     'roles', jsonb_build_array('admin', 'care'),
     'url',   coalesce((select value from lv_settings where key = 'app_url'), ''),
+    -- 逾時提醒同樣只給行政中心和「開這張單的那位」關懷員
     'targets', coalesce((select jsonb_agg(jsonb_build_object(
-        'endpoint', endpoint, 'p256dh', p256dh, 'auth', auth))
-      from lv_devices where dead = false and role in ('admin', 'care')), '[]'::jsonb)
+        'endpoint', d.endpoint, 'p256dh', d.p256dh, 'auth', d.auth))
+      from lv_devices d
+      where d.dead = false
+        and (d.role = 'admin' or (d.role = 'care' and d.person = pick.care))), '[]'::jsonb)
   )), '[]'::jsonb) into j from pick;
   return j;
 end $$;
@@ -639,12 +713,18 @@ begin
     raise exception '不認識的通知類型：%', p_event;
   end if;
 
+  /* 簽核通過／被退回，只該吵開這張單的那一位關懷員。
+     不分的話，全場每位關懷員的手機都會為別人的每一張單響一次 ——
+     營期第一個晚上就會有人把通知關掉，然後就再也收不到自己的了。
+     lv_devices.person 就是那支手機登入時打的名字，跟單子上的 care 對得起來。 */
   return jsonb_build_object(
     'event', p_event, 'title', v_title, 'body', v_body, 'roles', v_roles,
     'url', coalesce((select value from lv_settings where key = 'app_url'), ''),
     'targets', coalesce((select jsonb_agg(jsonb_build_object(
         'endpoint', endpoint, 'p256dh', p256dh, 'auth', auth))
-      from lv_devices where dead = false and role = any(v_roles)), '[]'::jsonb));
+      from lv_devices
+      where dead = false and role = any(v_roles)
+        and (role <> 'care' or person = l.care)), '[]'::jsonb));
 end $$;
 
 /* 推播結果回報。哪支手機的代碼死了就標記起來，
@@ -692,7 +772,8 @@ do $$
 declare f text;
 begin
   foreach f in array array[
-    'lv_bootstrap(text)', 'lv_leaves_get(text)', 'lv_students_get(text)', 'lv_poll(text)',
+    'lv_bootstrap(text,text)', 'lv_leaves_get(text,text)', 'lv_students_get(text)',
+    'lv_poll(text,text)',
     'lv_create(text,jsonb)', 'lv_update(text,jsonb)', 'lv_cancel(text,text,text)',
     'lv_approve(text,text,text)', 'lv_reject(text,text,text,text)',
     'lv_close(text,text,text,text)',
@@ -706,7 +787,7 @@ end $$;
    上面那一輪全域 revoke 只收回 public/anon/authenticated，
    但 service_role 原本的權限也是從 PUBLIC 那份來的，所以這裡要明確補回來。 */
 grant execute on function lv_who(text)                       to service_role;
-grant execute on function lv_all_json()                      to service_role;
+grant execute on function lv_all_json(text)                  to service_role;
 grant execute on function lv_rev()                           to service_role;
 grant execute on function lv_push_prepare(text, text, text)  to service_role;
 grant execute on function lv_push_finish(jsonb)               to service_role;

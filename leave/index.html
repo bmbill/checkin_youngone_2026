@@ -203,7 +203,7 @@ const K = { code:'lv_code', op:'lv_op', phone:'lv_phone', students:'lv_students'
 var S = {
   role:'', label:'', op:'', myPhone:'',
   leaves:[], students:[], rev:'', tab:'',
-  mineOnly:true, openLog:{}, live:false
+  openLog:{}, live:false
 };
 
 /* ══════════ 傳輸層 ══════════
@@ -227,7 +227,18 @@ async function rpc(fn, args, tries = 2) {
       const text = await res.text();
       if (!res.ok) {
         let m = text;
-        try { m = JSON.parse(text).message || text; } catch (e) {}
+        try {
+          const j = JSON.parse(text);
+          m = j.message || text;
+          /* PGRST202 = 資料庫裡找不到這支函式。實際上幾乎都是同一個原因：
+             網頁更新了、但 schema.sql 沒有重新貼過。PostgREST 原本的訊息是
+             一長串英文的 schema cache 說明，現場沒有人看得懂該做什麼。 */
+          if (j.code === 'PGRST202') {
+            m = '資料庫的版本比這一頁舊，找不到「' + fn + '」這支函式。\n\n' +
+                '請把 supabase/schema.sql 重新貼進 Supabase 的 SQL Editor 跑一次' +
+                '（可以重複執行，不會弄掉資料）。';
+          }
+        } catch (e) {}
         const err = new Error(m);
         err.fromServer = true;      // 伺服器有回話 = 業務規則擋下來的，重試沒有意義
         throw err;
@@ -393,7 +404,7 @@ function logout() {
 async function boot() {
   busy(true, '登入中…');
   try {
-    const r = await rpc('lv_bootstrap', { p_code: code() });
+    const r = await rpc('lv_bootstrap', { p_code: code(), p_op: localStorage.getItem(K.op) || '' });
     S.role    = r.role;
     S.label   = r.label;
     S.op      = localStorage.getItem(K.op) || '';
@@ -425,7 +436,7 @@ async function boot() {
 
 async function refresh(loud) {
   try {
-    const r = await rpc('lv_leaves_get', { p_code: code() });
+    const r = await rpc('lv_leaves_get', { p_code: code(), p_op: S.op });
     S.leaves = r.leaves || [];
     S.rev = r.rev;
     render();
@@ -492,10 +503,10 @@ async function startRealtime() {
 async function tick() {
   if (document.hidden || !$('gate').classList.contains('hide')) return;
   try {
-    const p = await rpc('lv_poll', { p_code: code() }, 0);
+    const p = await rpc('lv_poll', { p_code: code(), p_op: S.op }, 0);
     if (p.rev === S.rev) { setNet(true); return; }
 
-    const g = await rpc('lv_leaves_get', { p_code: code() }, 0);
+    const g = await rpc('lv_leaves_get', { p_code: code(), p_op: S.op }, 0);
     S.leaves = g.leaves || [];
     S.rev = g.rev;
     alertChanges();
@@ -545,7 +556,9 @@ function filterFor(tab) {
   if (tab === 'out')  return L.filter(x => x.status === ST.OUT);
   if (tab === 'done') return L.filter(x => [ST.DONE, ST.REJECT, ST.CANCEL].includes(x.status));
   if (tab === 'all')  return L.slice();
-  if (tab === 'mine') return S.mineOnly ? L.filter(x => x.care === S.op) : L.slice();
+  /* 關懷員拿到的清單在資料庫那端就已經只有他自己的單了（lv_scope），
+     所以這裡不需要再過濾一次，也沒有「看全部」可以切。 */
+  if (tab === 'mine') return L.slice();
   return [];
 }
 
@@ -585,11 +598,13 @@ function go(tab) { S.tab = tab; render(); window.scrollTo(0, 0); }
 function listHTML(list) {
   let head = '';
   if (S.role === 'care' && S.tab === 'mine') {
-    head += `<div class="card" style="padding:11px 12px">
-      <label style="margin:0;display:flex;align-items:center;gap:8px;color:var(--c-text);font-size:14px">
-        <input type="checkbox" style="width:auto" ${S.mineOnly ? 'checked' : ''}
-               onchange="S.mineOnly=this.checked;render()">
-        只看我（${esc(S.op)}）送出的單</label></div>`;
+    /* 名字是手打的，而系統就是靠這個字串認人。所以要把「你現在是誰」
+       明白寫在畫面上 —— 換手機打成「林 安」就會看不到「林安」開的單，
+       而且那時候畫面會是一片空白，沒有這行字的話沒人猜得到為什麼。 */
+    head += `<div class="card" style="padding:11px 12px;font-size:13px;line-height:1.7">
+      這裡只顯示<b>「${esc(S.op)}」</b>開出來的單。<br>
+      <span style="color:var(--c-dim)">名字打得不一樣就會看不到（例如多一個空格）。
+      換手機時請確認打法一致；要換人請用右上角「⋯」登出。</span></div>`;
   }
   if (S.role === 'admin' && S.tab === 'wait' && list.length) {
     head += `<div class="warn">有 ${list.length} 張單在等大組長／副大組長簽核。
@@ -710,8 +725,11 @@ function formHTML() {
       <button onclick="dueFromOut(360)">＋6 小時</button>
     </div>
 
-    <label class="req">關懷員（你）</label>
-    <input type="text" id="fCare" value="${esc(S.op)}">
+    <label>關懷員（你）</label>
+    <input type="text" id="fCare" value="${esc(S.op)}" disabled>
+    <div style="font-size:12px;color:var(--c-dim);margin-top:4px">
+      這一欄鎖住是刻意的：單子要靠這個名字才找得回來。在這裡改成別的名字，
+      送出後你自己就看不到這張單了。要換人請登出重新登入。</div>
     <label class="req">關懷員電話</label>
     <input type="tel" id="fCarePhone" inputmode="tel" value="${esc(S.myPhone)}">
 
