@@ -203,7 +203,7 @@ const K = { code:'lv_code', op:'lv_op', phone:'lv_phone', students:'lv_students'
 var S = {
   role:'', label:'', op:'', myPhone:'',
   leaves:[], students:[], rev:'', tab:'',
-  openLog:{}, live:false, rosterError:''
+  openLog:{}, live:false, rosterError:'', studentsAt:''
 };
 
 /* ══════════ 傳輸層 ══════════
@@ -415,6 +415,7 @@ async function boot() {
     S.myPhone = localStorage.getItem(K.phone) || '';
     S.leaves  = r.leaves || [];
     S.rev     = r.rev;
+    S.studentsAt = r.studentsAt || '';
     if (r.students) {
       S.students = r.students;
       try { localStorage.setItem(K.students, JSON.stringify(r.students)); } catch (e) {}
@@ -472,7 +473,42 @@ const ROSTER_FRESH_MS = 15 * 60 * 1000;
  *   手機上一份都沒有 → 沒名單就填不了單，所以擋著畫面等它抓完
  *   有舊的但過期了   → 舊名單先用，背景靜靜換新，不打斷任何人
  */
+/* 名單在背景換新時不要重繪填單畫面 —— 關懷員可能正打到一半，
+   render() 會把整張表單重建，打進去的字就沒了。
+   下拉選單是選的時候才讀 S.students，所以靜靜換掉就好，不必重繪。 */
+function renderUnlessTyping() {
+  if (S.role === 'care' && S.tab === 'new') return;
+  render();
+}
+
 var rosterSyncing = false;
+
+/**
+ * 決定這次輪詢要不要動名單。兩件不同的事，代價差很多：
+ *   資料庫那份過期了     → 真的去報到名單抄（慢，會打 Apps Script）
+ *   資料庫是新的但我手上舊 → 只補抓一次清單（快，只讀資料庫）
+ * 第二種是別人剛剛同步過的情況。少了它，「一個人更新、全隊受益」
+ * 只對了一半 —— 資料庫是新的，但一直開著頁面的人畫面上還是舊名單。
+ */
+async function syncStudentsIfNeeded(studentsAt) {
+  const dbStale = !studentsAt || (Date.now() - ts(studentsAt) >= ROSTER_FRESH_MS);
+  if (dbStale) { await maybeSyncRoster(studentsAt); return; }   // 同步完會順便抓新清單
+  if (studentsAt !== S.studentsAt) await refreshStudents(studentsAt);
+}
+
+async function refreshStudents(at) {
+  if (rosterSyncing) return;
+  rosterSyncing = true;
+  try {
+    S.students = await rpc('lv_students_get', { p_code: code() });
+    S.studentsAt = at;
+    try { localStorage.setItem(K.students, JSON.stringify(S.students)); } catch (e) {}
+    renderUnlessTyping();
+    console.log('別人同步過名單，已補抓新清單：' + S.students.length + ' 位');
+  } catch (e) {
+    console.warn('補抓名單失敗（先用手上這份）：', e);
+  } finally { rosterSyncing = false; }
+}
 
 async function maybeSyncRoster(studentsAt) {
   /* 輪詢每 8 秒跑一次，而同步要好幾秒。沒有這道閘的話，
@@ -503,8 +539,9 @@ async function syncRoster(opt) {
     if (r.error) throw new Error(r.error);
     S.students = await rpc('lv_students_get', { p_code: code() });
     try { localStorage.setItem(K.students, JSON.stringify(S.students)); } catch (e) {}
-    render();
+    if (opt.silent) renderUnlessTyping(); else render();
     S.rosterError = '';
+    S.studentsAt = new Date().toISOString();   // 剛剛才寫進去的，下一次輪詢會校正
     if (opt.silent) console.log('名單已在背景更新：' + r.count + ' 位');
     else toast(`名單已同步：${r.count} 位學員` + (r.removed ? `，移除 ${r.removed} 位` : ''));
   } catch (e) {
@@ -698,7 +735,7 @@ async function tick() {
     const p = await rpc('lv_poll', { p_code: code(), p_op: S.op }, 0);
     /* 順便看一眼名單新不新。只在開啟時檢查的話，關懷員把頁面一直開著
        就整晚都不會換到新名單，那個「多久更新一次」的設定也就沒有意義了。 */
-    if (S.role === 'care') maybeSyncRoster(p.studentsAt);
+    if (S.role === 'care') syncStudentsIfNeeded(p.studentsAt);
     if (p.rev === S.rev) { setNet(true); return; }
 
     const g = await rpc('lv_leaves_get', { p_code: code(), p_op: S.op }, 0);
