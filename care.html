@@ -57,6 +57,10 @@
 
     .btn-camera { width: 100%; padding: 12px; background: var(--m-blue); color: white; border: none;
                   border-radius: 10px; cursor: pointer; margin-bottom: 12px; font-size: 16px; font-weight: bold; flex-shrink: 0; }
+    .group-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-shrink: 0; }
+    .group-label { font-size: 14px; font-weight: bold; color: var(--m-blue); flex: none; }
+    .group-select { flex: 1; padding: 11px 10px; border: 1px solid var(--m-border); border-radius: 8px;
+                    font-size: 16px; background: #fafafa; outline: none; box-sizing: border-box; color: var(--m-text); }
     .search-group { display: flex; gap: 8px; margin-bottom: 15px; flex-shrink: 0; }
     .search-input-wrapper { flex: 1; position: relative; display: flex; align-items: center; }
     .search-input { width: 100%; padding: 12px; border: 1px solid var(--m-border); border-radius: 8px;
@@ -68,7 +72,10 @@
 
     #listArea, #editArea { width: 100%; }
     .result-item { display: flex; justify-content: space-between; align-items: center; padding: 15px; border-bottom: 1px solid #f0f0f0; background: #fff; }
-    .result-info { display: flex; flex-direction: column; flex: 1; }
+    /* min-width:0 是給下面備註預覽的省略號用的。flex 子項預設 min-width:auto，
+       會撐到剛好容納最長的那一行為止 —— 沒有這一行，很長的備註不但不會
+       出現「…」，還會把整個頁面推寬到可以左右捲。 */
+    .result-info { display: flex; flex-direction: column; flex: 1; min-width: 0; }
     .result-name { font-size: 18px; font-weight: bold; color: #333; }
     .result-id-small { color: #999; font-size: 14px; margin-left: 8px; }
     .result-tags { display: flex; gap: 4px; margin: 4px 0; }
@@ -76,6 +83,13 @@
     .tag-plate { font-size: 12px; padding: 1px 7px; border-radius: 4px; background: #f3f6fa;
                  border: 1px solid var(--m-blue); color: var(--m-blue); font-weight: bold;
                  letter-spacing: 1px; white-space: nowrap; }
+    /* 清單上的備註預覽。一行一筆，太長就切掉 —— 一整組列出來的時候
+       每個人都攤開全文的話，畫面會變成一面看不完的字牆。 */
+    .care-preview { margin: 5px 0 0; padding: 6px 9px; background: #f3f6fa;
+                    border-left: 3px solid var(--m-blue); border-radius: 4px; }
+    .care-line { font-size: 12px; color: #667; line-height: 1.6;
+                 overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .care-more { font-size: 11px; color: #aab; margin-top: 2px; }
     .status-undone { color: var(--danger); font-size: 14px; font-weight: bold; }
     .status-done { color: var(--success); font-size: 14px; font-weight: bold; }
     .btn-action { background: var(--m-blue); color: white; border: none; padding: 10px 20px; border-radius: 20px; font-weight: bold; cursor: pointer; }
@@ -187,6 +201,11 @@
   <button class="btn-camera" id="scanBtn" onclick="toggleScanner()">📷 開啟相機掃描</button>
   <div id="reader"></div>
   <div id="scanInfo" class="scan-info" style="display:none;"></div>
+
+  <div class="group-row">
+    <label class="group-label" for="groupSel">組別</label>
+    <select id="groupSel" class="group-select" onchange="queryGroup()"><option value="">全部</option></select>
+  </div>
 
   <div class="search-group">
     <div class="search-input-wrapper">
@@ -383,6 +402,7 @@
       lastSyncTime = res.serverTime; currentTotalRows = res.totalRows;
       localStorage.setItem(CACHE_KEY, JSON.stringify(res));
       document.getElementById('loadingOverlay').style.display = 'none';
+      fillGroupOptions();
       updateSyncTime();
       setInterval(autoSync, 30000);
 
@@ -400,6 +420,7 @@
         fullDataRows = res.rows; currentHeaders = res.headers; sysIndices = res.sysIndices;
         lastSyncTime = res.serverTime; currentTotalRows = res.totalRows;
         document.getElementById('loadingOverlay').style.display = 'none';
+        fillGroupOptions();
         document.getElementById('syncDisplay').innerText = '⚠ 離線模式（使用本機快取）';
         document.getElementById('syncDisplay').className = 'sync-time warning';
         setInterval(autoSync, 30000);
@@ -421,6 +442,7 @@
       (res.updates || []).forEach(function (u) { fullDataRows[u.row - 2] = u.values; });
       (res.newRows || []).forEach(function (n) { fullDataRows[n.row - 2] = n.values; });
       lastSyncTime = res.serverTime; currentTotalRows = res.serverTotalRows;
+      fillGroupOptions();      // 名單新增了人可能就多一組，選到的那組不會被彈掉
       updateSyncTime();
 
       // 別人剛好改了正在看的這個學員 → 就地重畫，不要把畫面關掉
@@ -565,11 +587,97 @@
     return !!(el && el.value.trim());
   }
 
+  /* ══════════ 依組別查詢 ══════════ */
+
+  /* 選項直接從名單現有的值長出來 —— 之後加組、改組名都不用回來改程式碼。
+     只有「全部」是寫死的，值用空字串代表不篩選。 */
+  function fillGroupOptions() {
+    var sel = document.getElementById('groupSel');
+    var gi = colGroup(), seen = {}, groups = [];
+    fullDataRows.forEach(function (r) {
+      var g = String(r[gi] || '').trim();
+      if (g && !seen[g]) { seen[g] = 1; groups.push(g); }
+    });
+    // 「第10組」要排在「第9組」後面，所以用 numeric 比較而不是純字串比較
+    groups.sort(function (a, b) { return a.localeCompare(b, 'zh-Hant', { numeric: true }); });
+
+    var keep = sel.value;
+    sel.innerHTML = '<option value="">全部</option>' +
+      groups.map(function (g) { return '<option value="' + esc(g) + '">' + esc(g) + '</option>'; }).join('');
+    if (keep) sel.value = keep;          // 同步進來的新資料不該把使用者選的組別彈掉
+  }
+
+  var lastGroupSel = '';
+  /* 現在是不是「看某一組」的狀態。關懷員的動線是：挑一組 → 點開某個人
+     → 寫備註 → 回名單看下一個，所以按 ✕ 要能回到剛才那份名單，
+     而不是回到一片空白再重挑一次。 */
+  var groupMode = false;
+
+  function queryGroup() {
+    var sel = document.getElementById('groupSel');
+    if (unsavedNote() && !confirm('備註還沒送出，換人就會不見。確定換組？')) {
+      sel.value = lastGroupSel;          // 使用者按了取消，下拉要回到原本那一組
+      return;
+    }
+    lastGroupSel = sel.value;
+
+    // 組別查詢和關鍵字查詢是兩種模式，切過來就把搜尋框讓出來
+    document.getElementById('keyword').value = '';
+    lastAutoTxt = '';
+    document.activeElement.blur();
+    document.getElementById('editArea').style.display = 'none';
+    currentEditRowData = null;
+
+    renderGroupList();
+  }
+
+  function renderGroupList() {
+    groupMode = true;
+    var g = document.getElementById('groupSel').value, gi = colGroup(), items = [];
+    for (var i = 0; i < fullDataRows.length; i++) {
+      if (!g || String(fullDataRows[i][gi] || '').trim() === g) {
+        items.push({ row: i + 2, values: fullDataRows[i] });
+      }
+    }
+
+    if (!items.length) {
+      document.getElementById('listArea').innerHTML =
+        '<div style="text-align:center; padding:40px; color:#ccc;">🔍 這一組沒有人</div>';
+      setTimeout(function(){ forceReflow(); }, 50);
+      return;
+    }
+
+    var noted = items.filter(function (it) { return careLines(it.values).length; }).length;
+    renderList(items, '<div class="room-head"><span>' + (g ? esc(g) : '全部') + '</span>' +
+               '<span class="status-done" style="font-weight:normal;">' +
+               items.length + ' 人　已有關懷紀錄 ' + noted + ' 人</span></div>');
+  }
+
+  /* 備註切成一行一筆。紀錄是往後接的，所以最後面那幾行才是最新狀況。 */
+  function careLines(v) {
+    var i = colCare();
+    if (i < 0) return [];
+    return String(v[i] || '').trim().split(/\r?\n/).filter(function (s) { return s.trim(); });
+  }
+
+  /* 清單上只放最近兩筆，其餘用「還有 N 筆」帶過。沒有備註就回空字串，
+     那一列下方就什麼都不會多出來。 */
+  function carePreview(v) {
+    var lines = careLines(v);
+    if (!lines.length) return '';
+    var show = lines.slice(-2), more = lines.length - show.length;
+    return '<div class="care-preview">' +
+           show.map(function (l) { return '<div class="care-line">' + esc(l) + '</div>'; }).join('') +
+           (more ? '<div class="care-more">…還有 ' + more + ' 筆</div>' : '') +
+           '</div>';
+  }
+
   function query() {
     var inputField = document.getElementById('keyword');
     var k = inputField.value.trim();
     if (!k) return;
 
+    groupMode = false;              // 改用關鍵字/掃碼了，✕ 就不該再跳回組名單
     document.activeElement.blur();
     document.getElementById('listArea').innerHTML = "";
     document.getElementById('editArea').style.display = "none";
@@ -600,7 +708,6 @@
     var h = '<div style="margin-top:10px;">' + (header || '');
     items.forEach(function (item) {
       var v = item.values, isDone = (v[sysIndices.check] == "1");
-      var care = String(v[colCare()] || '').trim();
       h += '<div class="result-item">' +
            '  <div class="result-info">' +
            '    <div><span class="result-name">' + esc(v[1]) + '</span><span class="result-id-small"> ' + esc(v[0]) + '</span></div>' +
@@ -608,9 +715,10 @@
                   (v[colGroup()] ? '<span class="tag-item">' + esc(v[colGroup()]) + '</span>' : '') +
                   (v[colRoom()]  ? '<span class="tag-item">房: ' + esc(v[colRoom()]) + '</span>' : '') +
                   plateTag(v) +
-                  (care ? '<span class="tag-item">📝 有關懷紀錄</span>' : '') +
            '    </div>' +
            '    <div class="' + (isDone ? 'status-done' : 'status-undone') + '">' + (isDone ? '已報到' : '未報到') + '</div>' +
+                // 有備註才長出來，沒有就整塊不存在，那一列維持原本的高度
+                carePreview(v) +
            '  </div>' +
            '  <button class="btn-action" onclick=\'showEdit(' + JSON.stringify(item) + ')\'>查看</button>' +
            '</div>';
@@ -756,13 +864,20 @@
     if (document.body.scrollTo) document.body.scrollTo({ top: 0, behavior: 'smooth' });
     else document.body.scrollTop = 0;
 
+    // 剛才在看某一組 → 回到那份名單（備註預覽也會是更新後的）
+    if (groupMode) renderGroupList();
+
     setTimeout(function () {
       forceReflow();
       if (!(html5QrCode && html5QrCode.isScanning)) document.getElementById('keyword').focus();
     }, 50);
   }
 
-  function clearSearch() { document.getElementById('keyword').value = ""; lastAutoTxt = ''; clearUI(); }
+  function clearSearch() {
+    document.getElementById('keyword').value = "";
+    lastAutoTxt = '';
+    clearUI();
+  }
 
   /* ══════════ 相機掃描 ══════════ */
 
