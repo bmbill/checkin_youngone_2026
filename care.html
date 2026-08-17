@@ -127,6 +127,25 @@
                 font-size: 12px; color: #888; line-height: 1.8; margin: 0 0 15px; }
     .note-log.care { background: #f3f6fa; border-color: #dbe4f0; color: #667; }
     .note-log.empty { color: #ccc; }
+
+    /* 一筆一列，右邊掛修改／刪除。min-width:0 同樣是給長字用的，
+       沒有的話 flex 子項會撐開整張卡片。 */
+    .care-entry { display: flex; align-items: flex-start; gap: 8px;
+                  padding: 6px 0; border-bottom: 1px dashed #e3eaf4; }
+    .care-entry:last-child { border-bottom: none; }
+    .care-entry-text { flex: 1; min-width: 0; word-break: break-word; }
+    .care-entry.deleted .care-entry-text { text-decoration: line-through; color: #c4c4c4; }
+    .care-entry-acts { flex: none; display: flex; gap: 4px; padding-top: 1px; }
+    .care-act { background: #fff; border: 1px solid var(--m-border); color: #999;
+                border-radius: 5px; padding: 4px 9px; font-size: 11px; }
+    .care-act.danger { color: var(--danger); border-color: #f0d0ce; }
+    .care-flag { font-size: 10px; color: #bbb; border: 1px solid #e0e0e0;
+                 border-radius: 3px; padding: 0 4px; margin-left: 6px; white-space: nowrap; }
+    .edit-hint { background: #fff8e1; border: 1px solid #f0e0a0; color: #8a7a3a;
+                 border-radius: 8px; padding: 8px 12px; font-size: 13px; margin-bottom: 8px; }
+    .btn-cancel-edit { width: 100%; height: 46px; background: #fff; color: #999;
+                       border: 1px solid var(--m-border); border-radius: 12px;
+                       font-size: 15px; margin: -15px 0 25px; }
     .note-input { width: 100%; min-height: 90px; padding: 12px; border: 1px solid var(--m-border);
                   border-radius: 12px; font-size: 16px; outline: none; resize: vertical;
                   background: #fff; box-sizing: border-box; margin-bottom: 10px; }
@@ -272,7 +291,8 @@
   const ARG_MAP = {
     getAllData:      [],
     getDeltaUpdates: ['lastSyncTime', 'localTotalRows'],
-    careNote:        ['row', 'note', 'op', 'at']
+    careNote:        ['row', 'note', 'op', 'at'],
+    careEdit:        ['row', 'oldLine', 'note', 'op', 'mode']
   };
   var jsonpSeq = 0;
 
@@ -508,6 +528,25 @@
 
   var LOG_SEP = '\n';
   function careLine(op, at, what) { return (op || '?') + '(關懷員) ' + at + ' ' + what; }
+
+  /* 刪除是「劃掉」不是「拿掉」：關懷紀錄講的是學員狀況，事後要追溯得回來。
+     這兩個標記要跟 Api.gs 裡的一模一樣。 */
+  var CARE_DELETED_MARK = '（已刪除）';
+  var CARE_EDITED_MARK  = '（已修改）';
+
+  function careParts(line) {
+    var s = String(line || ''), deleted = false;
+    if (s.indexOf(CARE_DELETED_MARK) === 0) { deleted = true; s = s.slice(CARE_DELETED_MARK.length); }
+    var m = s.match(/^([\s\S]*?)\(關懷員\)\s+(\d{1,2}:\d{2})\s+([\s\S]*)$/);
+    if (!m) return null;
+    var text = m[3], edited = false;
+    if (text.slice(-CARE_EDITED_MARK.length) === CARE_EDITED_MARK) {
+      edited = true; text = text.slice(0, -CARE_EDITED_MARK.length);
+    }
+    return { deleted: deleted, edited: edited, op: m[1], at: m[2], text: text };
+  }
+
+  function isDeletedLine(line) { return String(line || '').indexOf(CARE_DELETED_MARK) === 0; }
   function appendLog(existing, entries) {
     var base = String(existing || '').trim();
     entries = (entries || []).filter(Boolean);
@@ -655,7 +694,7 @@
       return;
     }
 
-    var noted   = items.filter(function (it) { return careLines(it.values).length; }).length;
+    var noted   = items.filter(function (it) { return careLinesActive(it.values).length; }).length;
     var arrived = items.filter(function (it) { return it.values[sysIndices.check] == '1'; }).length;
 
     renderList(items,
@@ -676,10 +715,16 @@
     return String(v[i] || '').trim().split(/\r?\n/).filter(function (s) { return s.trim(); });
   }
 
+  /* 已刪除的不算數：清單預覽和「關懷紀錄 N 人」都用這一支，
+     劃掉的紀錄只有點進去看細節時才會出現。 */
+  function careLinesActive(v) {
+    return careLines(v).filter(function (l) { return !isDeletedLine(l); });
+  }
+
   /* 清單上只放最近兩筆，其餘用「還有 N 筆」帶過。沒有備註就回空字串，
      那一列下方就什麼都不會多出來。 */
   function carePreview(v) {
-    var lines = careLines(v);
+    var lines = careLinesActive(v);
     if (!lines.length) return '';
     var show = lines.slice(-2), more = lines.length - show.length;
     return '<div class="care-preview">' +
@@ -754,6 +799,9 @@
 
   function showEdit(item, done) {
     currentEditRowData = item;
+    /* 換人（或重畫）就退出修改模式。不清的話，在 A 身上按了「修改」再跳到 B，
+       接著按儲存會拿 A 的那一行去改 B 的紀錄。 */
+    editingLine = null;
     var v = item.values, isDone = (v[sysIndices.check] == "1");
 
     document.activeElement.blur();
@@ -784,11 +832,11 @@
       h += '<div class="warn-box">名單第一列找不到「' + CARE_COL + '」欄，' +
            '請先在試算表加上這個標題，才能寫入備註。</div>';
     } else {
-      var care = String(v[ci] || '').trim();
-      h += care ? '<div class="note-log care">' + logHtml(care) + '</div>'
-                : '<div class="note-log care empty">還沒有關懷紀錄</div>';
+      h += careLogHtml(v);
+      h += '<div id="editHint" class="edit-hint" style="display:none;"></div>';
       h += '<textarea id="careInp" class="note-input" placeholder="新增關懷員備註..."></textarea>';
       h += '<button id="saveBtn" class="btn-save" onclick="saveCare(' + item.row + ')">送出備註</button>';
+      h += '<button id="cancelBtn" class="btn-cancel-edit" style="display:none;" onclick="cancelEdit()">取消修改</button>';
     }
 
     // ── 幹部備註（M 欄）：唯讀，讓關懷員看得到報到台當下發生了什麼
@@ -814,6 +862,97 @@
     }, 150);
   }
 
+  /* ══════════ 關懷紀錄的修改／刪除 ══════════ */
+
+  /* 目前面板上這個人的紀錄原文，index 對應畫面上的每一列。
+     按鈕帶的是 index，真正送去後端比對的是這裡的整行原文。 */
+  var careRows = [];
+  var editingLine = null;      // 正在修改哪一行（原文）；null = 新增模式
+
+  function careLogHtml(v) {
+    careRows = careLines(v);
+    if (!careRows.length) return '<div class="note-log care empty">還沒有關懷紀錄</div>';
+
+    var me = opName();
+    var h = '<div class="note-log care">';
+    careRows.forEach(function (raw, i) {
+      var p = careParts(raw);
+      var deleted = p ? p.deleted : isDeletedLine(raw);
+      // 格式看不懂的（例如有人直接在試算表上手打）照樣顯示，只是不給改
+      var mine = !!(p && !deleted && p.op === me && me);
+      var body = p ? (p.op + '(關懷員) ' + p.at + ' ' + p.text) : raw;
+
+      h += '<div class="care-entry' + (deleted ? ' deleted' : '') + '">' +
+           '<span class="care-entry-text">' + esc(body) +
+             (p && p.edited && !deleted ? '<span class="care-flag">已修改</span>' : '') +
+             (deleted ? '<span class="care-flag">已刪除</span>' : '') +
+           '</span>';
+      if (mine) {
+        h += '<span class="care-entry-acts">' +
+             '<button class="care-act" onclick="startEditLine(' + i + ')">修改</button>' +
+             '<button class="care-act danger" onclick="deleteLine(' + i + ')">刪除</button>' +
+             '</span>';
+      }
+      h += '</div>';
+    });
+    return h + '</div>';
+  }
+
+  function startEditLine(i) {
+    var raw = careRows[i], p = careParts(raw);
+    if (!p) return;
+    var inp = document.getElementById('careInp');
+    if (!editingLine && inp.value.trim() &&
+        !confirm('下面打到一半的字會被這一筆蓋掉，確定？')) return;
+
+    editingLine = raw;
+    inp.value = p.text;
+    document.getElementById('saveBtn').innerText = '儲存修改';
+    document.getElementById('cancelBtn').style.display = 'block';
+    var hint = document.getElementById('editHint');
+    hint.innerText = '正在修改 ' + p.at + ' 那一筆';
+    hint.style.display = 'block';
+    inp.focus();
+  }
+
+  function cancelEdit() {
+    editingLine = null;
+    var inp = document.getElementById('careInp');
+    if (inp) inp.value = '';
+    var b = document.getElementById('saveBtn');   if (b) b.innerText = '送出備註';
+    var c = document.getElementById('cancelBtn'); if (c) c.style.display = 'none';
+    var hint = document.getElementById('editHint'); if (hint) hint.style.display = 'none';
+  }
+
+  async function deleteLine(i) {
+    var raw = careRows[i], p = careParts(raw);
+    if (!p) return;
+    if (!confirm('要刪除這一筆嗎？\n\n' + p.at + '　' + p.text +
+                 '\n\n（刪除後會用劃掉的方式留著，不會真的消失）')) return;
+    await sendCareEdit('delete', raw, '');
+  }
+
+  /* 修改／刪除不進離線佇列。比對的是「整行原文」，等到有訊號才送出時，
+     那一行可能早就被別人改過，補送只會失敗得莫名其妙。
+     新增備註沒有這個問題，照樣進佇列。 */
+  async function sendCareEdit(mode, oldLine, note) {
+    if (!currentEditRowData) return;
+    var row = currentEditRowData.row, op = opName();
+    var btn = document.getElementById('saveBtn');
+    if (btn) { btn.disabled = true; btn.innerText = '⏳ 處理中...'; }
+
+    try {
+      const res = await callServer('careEdit', [row, oldLine, note, op, mode], 1);
+      applyLocalCare(row, res.careNote);
+      cancelEdit();
+      showEdit({ row: row, values: fullDataRows[row - 2] });
+      flash('ok', mode === 'delete' ? '已刪除這一筆' : '已儲存修改');
+    } catch (err) {
+      alert(String((err && err.message) || err));
+      if (btn) { btn.disabled = false; btn.innerText = editingLine ? '儲存修改' : '送出備註'; }
+    }
+  }
+
   /* 只更新 S 欄。報到、掃碼人、時間戳記這幾格連碰都不碰 ——
      本機這份 fullDataRows 也一樣，免得畫面顯示出跟雲端不同的報到狀態。 */
   function applyLocalCare(row, careNote) {
@@ -830,6 +969,9 @@
     var op = opName();
     if (!op) { alert('請先填上你的名字'); document.getElementById('operatorName').focus(); return; }
     localStorage.setItem('ck_op', op);
+
+    // 修改模式：改的是既有那一行，不是接一筆新的
+    if (editingLine) { await sendCareEdit('edit', editingLine, note); return; }
 
     btn.disabled = true; btn.innerText = '⏳ 送出中...';
     var at = hhmm();

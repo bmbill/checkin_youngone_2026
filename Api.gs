@@ -41,7 +41,7 @@ function role_(token) {
 
 /* 關懷員能呼叫的動作就這三個。權限擋在這裡而不是只靠前端少放按鈕 ——
    前端是公開的靜態檔，誰都能自己組一個網址出來。 */
-const CARE_ACTIONS = ['getAllData', 'getDeltaUpdates', 'careNote'];
+const CARE_ACTIONS = ['getAllData', 'getDeltaUpdates', 'careNote', 'careEdit'];
 
 /* ══════════ 欄位定位：認標題，不認位置 ══════════ */
 /**
@@ -240,6 +240,9 @@ function handleApi_(p) {
       case 'careNote':
         return jsonOut_(apiCareNote_(p), cb);
 
+      case 'careEdit':
+        return jsonOut_(apiCareEdit_(p), cb);
+
       default:
         return jsonOut_({ error: 'BAD_ACTION', message: '不支援的動作：' + p.action }, cb);
     }
@@ -391,6 +394,92 @@ function apiCareNote_(p) {
 /* 關懷員的紀錄標成「(關懷員)」，跟幹部的「(義工)」一眼分得出來 */
 function careLine_(op, at, what) {
   return (op || '?') + '(關懷員) ' + at + ' ' + what;
+}
+
+/* 刪除是「劃掉」不是「拿掉」：關懷紀錄講的是學員狀況，事後要追溯得回來。
+   標記放在行首，在試算表上直接看也一眼認得出來。 */
+const CARE_DELETED_MARK = '（已刪除）';
+const CARE_EDITED_MARK  = '（已修改）';
+
+function careParts_(line) {
+  var s = String(line || ''), deleted = false;
+  if (s.indexOf(CARE_DELETED_MARK) === 0) { deleted = true; s = s.slice(CARE_DELETED_MARK.length); }
+  var m = s.match(/^([\s\S]*?)\(關懷員\)\s+(\d{1,2}:\d{2})\s+([\s\S]*)$/);
+  if (!m) return null;
+  var text = m[3];
+  if (text.slice(-CARE_EDITED_MARK.length) === CARE_EDITED_MARK) {
+    text = text.slice(0, -CARE_EDITED_MARK.length);
+  }
+  return { deleted: deleted, op: m[1], at: m[2], text: text };
+}
+
+/**
+ * 修改／刪除一筆關懷紀錄。
+ *
+ * 認的是「整行原文」而不是行號。行號會錯 —— 手機上的名單每 30 秒才同步一次，
+ * 使用者看到的第 3 行，在別人剛剛刪掉第 2 行之後已經不是同一筆了，
+ * 照行號改下去就會動到別人的紀錄，而且沒有人會發現。
+ * 比對原文的話，只要那一行被動過就一定找不到，寧可請他重新整理。
+ */
+function apiCareEdit_(p) {
+  var row     = Number(p.row);
+  var oldLine = String(p.oldLine || '');
+  var note    = String(p.note || '').trim();
+  var op      = String(p.op || '').trim();
+  var del     = (p.mode === 'delete');
+
+  if (!row || row < 2) return { error: 'BAD_ROW',  message: '列號不正確' };
+  if (!oldLine)        return { error: 'BAD_LINE', message: '沒有指定要改哪一筆' };
+  if (!del && !note)   return { error: 'NO_NOTE',  message: '備註是空的' };
+
+  var parts = careParts_(oldLine);
+  if (!parts) return { error: 'BAD_LINE', message: '這筆紀錄的格式看不懂，請直接在試算表上修改' };
+
+  // 誰寫的誰才能改。名字是手打的，所以訊息要講清楚為什麼不給改
+  if (parts.op !== op) {
+    return { error: 'NOT_OWNER',
+             message: '這筆是「' + parts.op + '」寫的，只能由本人修改。' +
+                      '（如果這就是你，請把上方名字欄改成一模一樣）' };
+  }
+  if (parts.deleted) return { error: 'ALREADY_DELETED', message: '這筆已經刪除過了' };
+
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(25000)) return { error: 'BUSY', message: '系統忙碌中，請再試一次' };
+
+  try {
+    var sheet   = SpreadsheetApp.getActive().getSheetByName(CONFIG.SOURCE_SHEET);
+    var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
+    var col     = headers.lastIndexOf(CARE_COL_NAME);
+    if (col < 0) {
+      return { error: 'NO_COLUMN',
+               message: '名單第一列找不到「' + CARE_COL_NAME + '」欄' };
+    }
+
+    var cell  = sheet.getRange(row, col + 1);
+    var lines = String(cell.getDisplayValue() || '').split(LOG_SEP);
+
+    var at = -1;
+    for (var i = 0; i < lines.length; i++) {
+      if (lines[i] === oldLine) { at = i; break; }
+    }
+    if (at < 0) {
+      return { error: 'STALE',
+               message: '找不到這筆紀錄，可能已經被別人改過了。請重新整理後再試一次。' };
+    }
+
+    lines[at] = del
+      ? CARE_DELETED_MARK + oldLine
+      : careLine_(parts.op, parts.at, note) + CARE_EDITED_MARK;
+
+    var newNote = lines.join(LOG_SEP);
+    cell.setValue(newNote);
+    try { cell.setWrap(true); } catch (e) {}
+
+    return { success: true, row: row, careNote: newNote,
+             name: sheet.getRange(row, 2).getDisplayValue() };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 
