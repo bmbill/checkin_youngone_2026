@@ -811,6 +811,36 @@ begin
   return jsonb_build_object('ok', true);
 end $$;
 
+/* ══════════ 維護：清空測試資料 ══════════ */
+/**
+ * 測完想把場地掃乾淨時用。只能在 SQL Editor 裡跑：
+ *
+ *   select lv_reset_leaves('清空所有請假單');
+ *
+ * 為什麼要打那句話而不是直接 delete：
+ *   1. 這是不可回復的。營期期間有人貼錯一段 SQL，全場的請假紀錄就沒了 ——
+ *      多打一句話，就不會是「手滑」能造成的結果。
+ *   2. 它會順手把單號序號歸零。忘記歸零的話，營期第一張真正的單會是 L0008，
+ *      對照紙本時很容易讓人以為前面七張不見了。
+ *
+ * 推播裝置（lv_devices）和推播紀錄（lv_pushlog）刻意不動 ——
+ * 清掉裝置的話每支手機都要重新開一次推播，那跟「清測試單」是兩件事。
+ */
+create or replace function lv_reset_leaves(p_confirm text)
+returns text language plpgsql security definer set search_path = public as $$
+declare n int;
+begin
+  if p_confirm <> '清空所有請假單' then
+    raise exception '要清空請假單，參數請填「清空所有請假單」這五個字。目前收到的是「%」', p_confirm;
+  end if;
+  select count(*) into n from lv_leaves;
+  delete from lv_leaves;
+  alter sequence lv_no_seq restart with 1;
+  return '已清空 ' || n || ' 張請假單，下一張單號會是 L0001。';
+end $$;
+revoke all on function lv_reset_leaves(text) from public, anon, authenticated;
+
+
 /* ══════════ 權限收尾 ══════════
    這一段一定要在所有函式都建好之後跑，而且順序是「先全收回、再逐一開放」。
    為什麼不能只 revoke from anon：PostgreSQL 建立函式時會**預設把 EXECUTE
