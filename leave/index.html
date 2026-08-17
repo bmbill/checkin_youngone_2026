@@ -1,0 +1,1031 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="請假系統">
+  <meta name="theme-color" content="#8d746a">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <title>卓青營 請假系統</title>
+  <style>
+    /* 配色刻意跟另外兩頁分開：報到是 sage 綠、關懷員是 blue 藍、請假是 coffee 棕。
+       營期現場三個頁面會在同一支手機上開來開去，一眼認得出現在在哪一個最重要。 */
+    :root {
+      --c-main: #8d746a; --c-deep: #6f5a51; --c-sand: #f4f1ea; --c-line: #e8e1da;
+      --c-text: #5d5d5d; --c-dim: #9a9a9a;
+      --st-wait: #c98a1e; --st-out: #2f6db5; --st-done: #2e7d32;
+      --st-reject: #d9534f; --st-cancel: #9a9a9a;
+    }
+    * { -webkit-tap-highlight-color: transparent; }
+    html { height: 100%; background: var(--c-sand); }
+    body {
+      font-family: "PingFang TC", "微軟正黑體", "Microsoft JhengHei", sans-serif;
+      margin: 0; padding: 0 0 env(safe-area-inset-bottom); min-height: 100%;
+      background: var(--c-sand); color: var(--c-text); -webkit-text-size-adjust: 100%;
+    }
+    .wrap { max-width: 620px; margin: 0 auto; padding: 10px 10px 40px; box-sizing: border-box; }
+    .card { background: #fff; border-radius: 14px; padding: 14px; margin-bottom: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,.05); }
+
+    .top { display: flex; align-items: center; gap: 8px; padding: 4px 2px 10px; }
+    .top h1 { font-size: 18px; margin: 0; color: var(--c-deep); flex: 1; }
+    .badge { font-size: 12px; background: var(--c-main); color: #fff;
+             padding: 3px 9px; border-radius: 20px; white-space: nowrap; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: #ccc; flex: 0 0 auto; }
+    .dot.on { background: #4caf50; }
+    .dot.live { background: #4caf50; box-shadow: 0 0 0 3px rgba(76,175,80,.25); }
+    .ghost { background: none; border: 1px solid var(--c-line); color: var(--c-dim);
+             font-size: 15px; padding: 5px 11px; border-radius: 8px; }
+
+    .tabs { display: flex; gap: 6px; margin-bottom: 12px; }
+    .tab { flex: 1; text-align: center; padding: 11px 4px; border-radius: 10px;
+           background: #fff; border: 1px solid var(--c-line); color: var(--c-dim);
+           font-size: 14px; font-weight: bold; }
+    .tab.on { background: var(--c-main); border-color: var(--c-main); color: #fff; }
+    .tab .n { display: inline-block; min-width: 18px; margin-left: 3px; font-size: 12px;
+              background: var(--st-reject); color: #fff; border-radius: 20px; padding: 1px 5px; }
+    .tab.on .n { background: rgba(255,255,255,.32); }
+
+    label { display: block; font-size: 13px; color: var(--c-dim); margin: 12px 0 4px; }
+    label:first-child { margin-top: 0; }
+    input, select, textarea {
+      width: 100%; box-sizing: border-box; font-size: 16px;   /* 16px 以下 iOS 會自動放大整頁 */
+      padding: 11px 10px; border: 1px solid var(--c-line); border-radius: 9px;
+      background: #fff; color: var(--c-text); font-family: inherit;
+    }
+    input:disabled, select:disabled { background: #f6f3f0; color: var(--c-text); }
+    .req::after { content: " ＊"; color: var(--st-reject); }
+    .btn { width: 100%; padding: 15px; font-size: 17px; font-weight: bold; color: #fff;
+           background: var(--c-main); border: none; border-radius: 11px; margin-top: 16px;
+           font-family: inherit; }
+    .btn:disabled { background: #c9bfb8; }
+    .btn.ok { background: var(--st-done); }
+    .btn.no { background: var(--st-reject); }
+    .btn.grey { background: #b0a49c; }
+    .btn.dark { background: var(--c-deep); }
+    .btn.sm { padding: 12px; font-size: 15px; margin-top: 8px; }
+    .row2 { display: flex; gap: 8px; margin-top: 8px; }
+    .row2 > * { flex: 1; min-width: 0; margin-top: 0 !important; }
+    .quick { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+    .quick button { font-size: 12px; padding: 7px 10px; border-radius: 7px;
+                    border: 1px solid var(--c-line); background: #fff; color: var(--c-main);
+                    font-family: inherit; }
+
+    .lv { background: #fff; border-radius: 12px; margin-bottom: 10px; overflow: hidden;
+          box-shadow: 0 2px 8px rgba(0,0,0,.05); border-left: 5px solid var(--c-line); }
+    .lv.wait   { border-left-color: var(--st-wait); }
+    .lv.out    { border-left-color: var(--st-out); }
+    .lv.done   { border-left-color: var(--st-done); }
+    .lv.reject { border-left-color: var(--st-reject); }
+    .lv.cancel { border-left-color: var(--st-cancel); opacity: .6; }
+    .lv-h { display: flex; align-items: baseline; gap: 8px; padding: 11px 13px 4px; }
+    .lv-n { font-size: 12px; color: var(--c-dim); font-family: ui-monospace, monospace; }
+    .lv-s { font-size: 12px; font-weight: bold; margin-left: auto; padding: 2px 8px;
+            border-radius: 20px; color: #fff; white-space: nowrap; }
+    .lv.wait .lv-s   { background: var(--st-wait); }
+    .lv.out .lv-s    { background: var(--st-out); }
+    .lv.done .lv-s   { background: var(--st-done); }
+    .lv.reject .lv-s { background: var(--st-reject); }
+    .lv.cancel .lv-s { background: var(--st-cancel); }
+    .lv-name { font-size: 19px; font-weight: bold; color: var(--c-deep); padding: 0 13px 2px; }
+    .lv-name small { font-size: 13px; font-weight: normal; color: var(--c-dim); margin-left: 6px; }
+    .lv-b { padding: 4px 13px 12px; font-size: 14px; line-height: 1.75; }
+    .lv-b .k { color: var(--c-dim); display: inline-block; min-width: 4.4em; }
+    .lv-b a { color: var(--st-out); text-decoration: none; }
+    .late { color: var(--st-reject); font-weight: bold; }
+    .why { background: #fdf1f0; color: #a5322e; padding: 7px 9px; border-radius: 8px;
+           margin-top: 6px; font-size: 13px; }
+    .acts { padding: 0 13px 13px; }
+    .log { font-size: 12px; color: var(--c-dim); line-height: 1.9;
+           border-top: 1px dashed var(--c-line); margin: 0 13px; padding: 8px 0 10px; }
+    .fold { font-size: 12px; color: var(--c-main); padding: 0 13px 11px; }
+
+    .empty { text-align: center; color: var(--c-dim); font-size: 14px; padding: 34px 10px; }
+    .warn { background: #fff8e6; border: 1px solid #f0dca8; color: #8a6a12;
+            padding: 11px 12px; border-radius: 10px; font-size: 13px; line-height: 1.75;
+            margin-bottom: 12px; }
+    .warn.bad { background: #fdf1f0; border-color: #f0c0be; color: #a5322e; }
+    .msg { font-size: 13px; margin-top: 10px; line-height: 1.7; }
+    .msg.err { color: var(--st-reject); }
+
+    .over { position: fixed; inset: 0; background: var(--c-sand); z-index: 50;
+            display: flex; align-items: center; justify-content: center; padding: 18px;
+            overflow-y: auto; }
+    .over .card { width: 100%; max-width: 380px; margin: 0; }
+    .busy { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 70;
+            display: flex; align-items: center; justify-content: center; color: #fff; font-size: 15px; }
+    .sheet { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 65;
+             display: flex; align-items: flex-end; }
+    .sheet > div { background: #fff; width: 100%; border-radius: 16px 16px 0 0; padding: 10px 14px
+                   calc(14px + env(safe-area-inset-bottom)); }
+    .sheet button { width: 100%; text-align: left; background: none; border: none;
+                    border-bottom: 1px solid var(--c-line); padding: 16px 4px; font-size: 16px;
+                    color: var(--c-text); font-family: inherit; }
+    .sheet button:last-child { border-bottom: none; color: var(--c-dim); }
+    .hide { display: none !important; }
+    .toast { position: fixed; left: 12px; right: 12px; bottom: 16px; z-index: 80;
+             background: var(--c-deep); color: #fff; padding: 13px 15px; border-radius: 11px;
+             font-size: 14px; line-height: 1.65; box-shadow: 0 6px 20px rgba(0,0,0,.25); }
+    .foot { text-align: center; font-size: 11px; color: #c2b8b1; padding: 8px 0 20px; }
+  </style>
+</head>
+<body>
+
+<!-- ══════════ 登入 ══════════ -->
+<div id="gate" class="over">
+  <div class="card">
+    <h1 style="font-size:20px;margin:0 0 4px;color:var(--c-deep);text-align:center">卓青營 請假系統</h1>
+    <div style="font-size:13px;color:var(--c-dim);text-align:center;margin-bottom:18px">
+      輸入你的身分通行碼，這支手機只需要輸入一次
+    </div>
+    <label class="req">通行碼</label>
+    <input type="password" id="gCode" autocomplete="off">
+    <label class="req">你的姓名</label>
+    <input type="text" id="gOp" autocomplete="off" placeholder="填單和簽核都會記下是誰做的">
+    <label>你的行動電話</label>
+    <input type="tel" id="gPhone" autocomplete="off" placeholder="關懷員請填，會印在請假單上">
+    <button class="btn" id="gBtn" onclick="doLogin()">進入</button>
+    <div id="gMsg" class="msg err"></div>
+  </div>
+</div>
+
+<!-- ══════════ 主畫面 ══════════ -->
+<div class="wrap hide" id="app">
+  <div class="top">
+    <h1>請假系統</h1>
+    <span class="dot" id="netDot" title="連線狀態"></span>
+    <span class="badge" id="roleTag"></span>
+    <button class="ghost" onclick="openMenu()">⋯</button>
+  </div>
+  <div id="pushBox"></div>
+  <div class="tabs" id="tabs"></div>
+  <div id="body"></div>
+  <div class="foot" id="foot"></div>
+</div>
+
+<div id="menu" class="sheet hide" onclick="if(event.target===this)closeMenu()"><div id="menuInner"></div></div>
+<div id="busy" class="busy hide"><span id="busyText">處理中…</span></div>
+<div id="toast" class="toast hide" onclick="this.classList.add('hide')"></div>
+
+<script src="config.js"></script>
+<script>
+/* ════════════════════════════════════════════════════════════════════════
+   卓青營 請假／銷假系統　前端 (leave-v2 / Supabase)
+
+   這個檔案是公開的（GitHub Pages），所以：
+     · 通行碼不寫在這裡，也不存在任何公開檔案裡 —— 只有 bcrypt 雜湊在資料庫
+     · config.js 裡的 anon key 是「設計上公開」的金鑰，它本身什麼權限都沒有：
+       資料庫裡每一張表對 anon 都是零權限，能呼叫的只有 12 支 lv_* 函式，
+       而每一支的第一行都是驗通行碼
+     · 權限不是靠「這一頁少放幾顆按鈕」擋的。關懷員的碼呼叫 lv_approve
+       會被資料庫直接拒絕，不管請求是從哪裡發出來的
+
+   四種身分共用這一個檔案，畫面由資料庫回傳的 role 決定：
+     care   關懷員      填單、改自己的單、銷假
+     lead   大組長      簽核／退回
+     deputy 副大組長    簽核／退回
+     admin  行政中心    唯讀全部 + 代為銷假（服務台備援）+ 同步名單
+   ════════════════════════════════════════════════════════════════════════ */
+
+const APP_VERSION = 'leave-v2';
+
+const ST = { WAIT:'等待簽核', OUT:'請假中', DONE:'完成銷假', REJECT:'已退回', CANCEL:'已取消' };
+const CLS = { '等待簽核':'wait', '請假中':'out', '完成銷假':'done', '已退回':'reject', '已取消':'cancel' };
+
+/* localStorage 一律用 lv_ 前綴。報到頁和關懷員頁用 ck_，
+   共用同一組 key 的話兩邊會互相把對方的登入洗掉。 */
+const K = { code:'lv_code', op:'lv_op', phone:'lv_phone', students:'lv_students', draft:'lv_draft' };
+
+var S = {
+  role:'', label:'', op:'', myPhone:'',
+  leaves:[], students:[], rev:'', tab:'',
+  mineOnly:true, openLog:{}, live:false
+};
+
+/* ══════════ 傳輸層 ══════════
+   直接打 PostgREST 的 rpc 端點。用 fetch 而不是 SDK：
+   營期現場訊號差，開頁面就先抓一支 CDN 上的 SDK 太脆弱 ——
+   即時訂閱要用的 SDK 是等真的要用時才動態載入，載不到就退回輪詢。 */
+
+function code() { return localStorage.getItem(K.code) || ''; }
+
+async function rpc(fn, args, tries = 2) {
+  if (!CFG.url || !CFG.anonKey) throw new Error('這一頁還沒設定好（config.js），請找管理者');
+  let last;
+  for (let i = 0; i <= tries; i++) {
+    try {
+      const res = await fetch(CFG.url + '/rest/v1/rpc/' + fn, {
+        method: 'POST',
+        headers: { 'apikey': CFG.anonKey, 'Authorization': 'Bearer ' + CFG.anonKey,
+                   'Content-Type': 'application/json' },
+        body: JSON.stringify(args)
+      });
+      const text = await res.text();
+      if (!res.ok) {
+        let m = text;
+        try { m = JSON.parse(text).message || text; } catch (e) {}
+        const err = new Error(m);
+        err.fromServer = true;      // 伺服器有回話 = 業務規則擋下來的，重試沒有意義
+        throw err;
+      }
+      setNet(true);
+      return text ? JSON.parse(text) : null;
+    } catch (e) {
+      last = e;
+      if (e.fromServer) break;
+      if (i < tries) await new Promise(r => setTimeout(r, 700));
+    }
+  }
+  if (!last.fromServer) setNet(false);
+  throw last;
+}
+
+/* 推播是加值功能，成功與否都不該影響已經寫進資料庫的單子，
+   所以一律射後不理，錯誤只留在 console。 */
+function firePush(event, no) {
+  if (!CFG.url) return;
+  fetch(CFG.url + '/functions/v1/push', {
+    method: 'POST',
+    headers: { 'apikey': CFG.anonKey, 'Authorization': 'Bearer ' + CFG.anonKey,
+               'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: code(), event: event, no: no })
+  }).then(r => r.json()).then(r => { if (r && r.error) console.warn('推播：', r.error); })
+    .catch(e => console.warn('推播送不出去：', e));
+}
+
+function setNet(ok) {
+  const d = document.getElementById('netDot');
+  if (d) d.className = 'dot' + (ok ? (S.live ? ' live' : ' on') : '');
+}
+
+/* ══════════ 小工具 ══════════ */
+
+function $(id) { return document.getElementById(id); }
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
+    ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+}
+function busy(on, text) {
+  $('busyText').innerText = text || '處理中…';
+  $('busy').classList.toggle('hide', !on);
+}
+var toastTimer = null;
+function toast(html, ms) {
+  const t = $('toast');
+  t.innerHTML = html;
+  t.classList.remove('hide');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.add('hide'), ms || 5000);
+}
+
+/* 時間一律用 ISO 字串在網路上跑，顯示才換成手機的當地時間。
+   營期裡年份是廢話，只會佔掉手機寬度，所以只顯示到月日時分。 */
+function fmt(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d)) return String(iso);
+  const p = n => ('0' + n).slice(-2);
+  return `${p(d.getMonth()+1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function toInput(d) {
+  const p = n => ('0' + n).slice(-2);
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+/* datetime-local 給的 "2026-08-22T14:00" 會被當成手機的當地時間解讀，
+   轉成 ISO 之後帶著正確的時區資訊送給資料庫 —— 兩邊都不必知道對方在哪一時區。 */
+function toIso(v) {
+  const d = new Date(v);
+  return isNaN(d) ? '' : d.toISOString();
+}
+function ts(iso) { const t = new Date(iso).getTime(); return isNaN(t) ? 0 : t; }
+function mins(ms) {
+  const m = Math.round(ms / 60000);
+  return m >= 60 ? `${Math.floor(m/60)} 小時 ${m%60} 分` : `${m} 分`;
+}
+function telLink(p) {
+  const t = String(p || '').replace(/[^\d+]/g, '');
+  return t ? `<a href="tel:${esc(t)}">${esc(p)}</a>` : '—';
+}
+
+/* ══════════ 提示音 ══════════
+   iOS 一定要有使用者手勢才建得起 AudioContext，所以在按「進入」時就先開好。 */
+var actx = null;
+function unlockAudio() {
+  try { actx = actx || new (window.AudioContext || window.webkitAudioContext)(); actx.resume(); }
+  catch (e) {}
+}
+function beep(times) {
+  if (actx) {
+    for (let i = 0; i < (times || 2); i++) {
+      const o = actx.createOscillator(), g = actx.createGain();
+      o.connect(g); g.connect(actx.destination);
+      o.type = 'sine'; o.frequency.value = 880;
+      const t = actx.currentTime + i * 0.28;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.25, t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
+      o.start(t); o.stop(t + 0.24);
+    }
+  }
+  try { navigator.vibrate && navigator.vibrate([180, 90, 180]); } catch (e) {}
+}
+
+/* ══════════ 登入 ══════════ */
+
+function showGate(msg) {
+  $('gate').classList.remove('hide');
+  $('app').classList.add('hide');
+  $('gMsg').innerText = msg || '';
+  $('gCode').value = '';
+  $('gOp').value = localStorage.getItem(K.op) || '';
+  $('gPhone').value = localStorage.getItem(K.phone) || '';
+}
+
+async function doLogin() {
+  unlockAudio();
+  const c = $('gCode').value.trim();
+  const op = $('gOp').value.trim();
+  const ph = $('gPhone').value.trim();
+  if (!c)  { $('gMsg').innerText = '請填通行碼'; return; }
+  if (!op) { $('gMsg').innerText = '請填你的姓名'; return; }
+
+  localStorage.setItem(K.code, c);
+  localStorage.setItem(K.op, op);
+  if (ph) localStorage.setItem(K.phone, ph);
+  $('gBtn').disabled = true; $('gMsg').innerText = '';
+  try {
+    await boot();
+  } catch (e) {
+    if (/通行碼/.test(e.message)) localStorage.removeItem(K.code);
+    $('gMsg').innerText = e.message;
+  } finally {
+    $('gBtn').disabled = false;
+  }
+}
+
+/* ══════════ 選單 ══════════ */
+
+function openMenu() {
+  const items = [
+    ['重新整理', 'refresh(true)'],
+    (S.role === 'care' || S.role === 'admin') ? ['同步學員名單（從報到名單抄一份）', 'syncRoster()'] : null,
+    ['登出（換人用這支手機）', 'logout()'],
+    [`關閉　${esc(S.label)}　${esc(S.op)}　${APP_VERSION}`, 'closeMenu()']
+  ].filter(Boolean);
+  $('menuInner').innerHTML = items.map(([t, fn]) =>
+    `<button onclick="closeMenu();${fn}">${t}</button>`).join('');
+  $('menu').classList.remove('hide');
+}
+function closeMenu() { $('menu').classList.add('hide'); }
+
+function logout() {
+  if (!confirm('登出後這支手機要重新輸入通行碼，確定？')) return;
+  localStorage.removeItem(K.code);
+  showGate('已登出');
+}
+
+/* ══════════ 開機 ══════════ */
+
+async function boot() {
+  busy(true, '登入中…');
+  try {
+    const r = await rpc('lv_bootstrap', { p_code: code() });
+    S.role    = r.role;
+    S.label   = r.label;
+    S.op      = localStorage.getItem(K.op) || '';
+    S.myPhone = localStorage.getItem(K.phone) || '';
+    S.leaves  = r.leaves || [];
+    S.rev     = r.rev;
+    if (r.students) {
+      S.students = r.students;
+      try { localStorage.setItem(K.students, JSON.stringify(r.students)); } catch (e) {}
+    } else if (S.role === 'care') {
+      try { S.students = JSON.parse(localStorage.getItem(K.students) || '[]'); } catch (e) {}
+    }
+
+    $('gate').classList.add('hide');
+    $('app').classList.remove('hide');
+    $('roleTag').innerText = S.label + '　' + S.op;
+    $('foot').innerText = APP_VERSION + '　' + S.label + '：' + S.op;
+    S.tab = TABS[S.role][0][0];
+    seen.wait = new Set(S.leaves.filter(x => x.status === ST.WAIT).map(x => x.no));
+    seen.mine = new Set(S.leaves.map(x => x.no + x.status));
+    render();
+    renderPushBox();
+    startPolling();
+    startRealtime();
+  } finally {
+    busy(false);
+  }
+}
+
+async function refresh(loud) {
+  try {
+    const r = await rpc('lv_leaves_get', { p_code: code() });
+    S.leaves = r.leaves || [];
+    S.rev = r.rev;
+    render();
+    if (loud) toast(`已更新，共 ${S.leaves.length} 張單`);
+  } catch (e) {
+    if (loud) toast('更新失敗：' + esc(e.message));
+  }
+}
+
+async function syncRoster() {
+  if (!confirm('去報到名單抄一份最新的學員清單過來？\n\n只會讀取，不會動到報到名單。')) return;
+  busy(true, '同步名單…');
+  try {
+    const res = await fetch(CFG.url + '/functions/v1/sync-roster', {
+      method: 'POST',
+      headers: { 'apikey': CFG.anonKey, 'Authorization': 'Bearer ' + CFG.anonKey,
+                 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: code() })
+    });
+    const r = await res.json();
+    if (r.error) throw new Error(r.error);
+    S.students = await rpc('lv_students_get', { p_code: code() });
+    try { localStorage.setItem(K.students, JSON.stringify(S.students)); } catch (e) {}
+    render();
+    toast(`名單已同步：${r.count} 位學員` + (r.removed ? `，移除 ${r.removed} 位` : ''));
+  } catch (e) {
+    alert('同步失敗：\n\n' + e.message);
+  } finally { busy(false); }
+}
+
+/* ══════════ 更新：即時訂閱 + 輪詢保底 ══════════
+   即時訂閱讓關懷員按下送出的那一秒，大組長手機上就跳出來。
+   但現場訊號會斷、CDN 會擋、瀏覽器會睡著，所以輪詢一定要留著 ——
+   訂閱通了就把輪詢放慢到 30 秒，沒通就 8 秒一次。 */
+
+var seen = { wait: new Set(), mine: new Set() };
+var pollTimer = null;
+
+function startPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(tick, S.live ? 30000 : 8000);
+  document.removeEventListener('visibilitychange', onVisible);
+  document.addEventListener('visibilitychange', onVisible);
+}
+function onVisible() { if (!document.hidden) tick(); }
+
+async function startRealtime() {
+  if (CFG.realtime === false) return;
+  try {
+    const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2.45.4');
+    const sb = createClient(CFG.url, CFG.anonKey);
+    sb.channel('lv')
+      .on('broadcast', { event: 'changed' }, () => tick())
+      .subscribe(st => {
+        S.live = (st === 'SUBSCRIBED');
+        setNet(true);
+        startPolling();      // 訂閱狀態變了就重設輪詢頻率
+      });
+  } catch (e) {
+    console.warn('即時訂閱載不起來，改用輪詢：', e);
+  }
+}
+
+async function tick() {
+  if (document.hidden || !$('gate').classList.contains('hide')) return;
+  try {
+    const p = await rpc('lv_poll', { p_code: code() }, 0);
+    if (p.rev === S.rev) { setNet(true); return; }
+
+    const g = await rpc('lv_leaves_get', { p_code: code() }, 0);
+    S.leaves = g.leaves || [];
+    S.rev = g.rev;
+    alertChanges();
+    render();
+  } catch (e) { if (!e.fromServer) setNet(false); }
+}
+
+/* 什麼時候該吵人：
+     簽核的人 —— 有新的待簽核單子
+     關懷員   —— 自己送的單被簽核或被退回
+   其他變動安靜更新就好，營期現場手機一直響只會讓人把通知關掉。 */
+function alertChanges() {
+  if (S.role === 'lead' || S.role === 'deputy' || S.role === 'admin') {
+    const now = S.leaves.filter(x => x.status === ST.WAIT);
+    const fresh = now.filter(x => !seen.wait.has(x.no));
+    seen.wait = new Set(now.map(x => x.no));
+    if (fresh.length) {
+      beep(3);
+      toast('🔔 有 ' + fresh.length + ' 張新的請假單待簽核<br>' +
+            fresh.map(x => esc(x.grp + ' ' + x.name)).join('、'));
+      if (S.role !== 'admin' && S.tab !== 'wait') { S.tab = 'wait'; }
+    }
+  } else if (S.role === 'care') {
+    const mine = S.leaves.filter(x => x.care === S.op);
+    const hit = mine.filter(x => (x.status === ST.OUT || x.status === ST.REJECT) &&
+                                 !seen.mine.has(x.no + x.status));
+    mine.forEach(x => seen.mine.add(x.no + x.status));
+    if (hit.length) {
+      beep(2);
+      toast('🔔 ' + hit.map(x => esc(x.name + '　' + x.status)).join('<br>'));
+    }
+  }
+}
+
+/* ══════════ 版面 ══════════ */
+
+const TABS = {
+  care:   [['new','填新單'], ['mine','單子狀況']],
+  lead:   [['wait','待簽核'], ['out','請假中'], ['done','已結束']],
+  deputy: [['wait','待簽核'], ['out','請假中'], ['done','已結束']],
+  admin:  [['wait','等待核可'], ['out','請假中'], ['done','完成銷假'], ['all','全部']]
+};
+
+function filterFor(tab) {
+  const L = S.leaves;
+  if (tab === 'wait') return L.filter(x => x.status === ST.WAIT);
+  if (tab === 'out')  return L.filter(x => x.status === ST.OUT);
+  if (tab === 'done') return L.filter(x => [ST.DONE, ST.REJECT, ST.CANCEL].includes(x.status));
+  if (tab === 'all')  return L.slice();
+  if (tab === 'mine') return S.mineOnly ? L.filter(x => x.care === S.op) : L.slice();
+  return [];
+}
+
+const ORDER = { '等待簽核':0, '已退回':1, '請假中':2, '完成銷假':3, '已取消':4 };
+function sorted(a) {
+  return a.slice().sort((x, y) => (ORDER[x.status] - ORDER[y.status]) ||
+                                  (ts(y.createdAt) - ts(x.createdAt)));
+}
+
+function render() {
+  renderTabs();
+  const b = $('body');
+  if (S.role === 'care' && S.tab === 'new') { b.innerHTML = formHTML(); afterForm(); return; }
+  b.innerHTML = listHTML(sorted(filterFor(S.tab)));
+}
+
+function overdueList() {
+  return S.leaves.filter(x => x.status === ST.OUT && ts(x.due) && Date.now() > ts(x.due));
+}
+
+function renderTabs() {
+  const wait = S.leaves.filter(x => x.status === ST.WAIT).length;
+  const late = overdueList().length;
+  $('tabs').innerHTML = TABS[S.role].map(([k, label]) => {
+    let n = '';
+    if (k === 'wait' && wait) n = `<span class="n">${wait}</span>`;
+    if (k === 'out'  && late) n = `<span class="n">${late}</span>`;
+    if (k === 'mine') {
+      const w = filterFor('mine').filter(x => [ST.WAIT, ST.REJECT].includes(x.status)).length;
+      if (w) n = `<span class="n">${w}</span>`;
+    }
+    return `<button class="tab ${S.tab === k ? 'on' : ''}" onclick="go('${k}')">${label}${n}</button>`;
+  }).join('');
+}
+function go(tab) { S.tab = tab; render(); window.scrollTo(0, 0); }
+
+function listHTML(list) {
+  let head = '';
+  if (S.role === 'care' && S.tab === 'mine') {
+    head += `<div class="card" style="padding:11px 12px">
+      <label style="margin:0;display:flex;align-items:center;gap:8px;color:var(--c-text);font-size:14px">
+        <input type="checkbox" style="width:auto" ${S.mineOnly ? 'checked' : ''}
+               onchange="S.mineOnly=this.checked;render()">
+        只看我（${esc(S.op)}）送出的單</label></div>`;
+  }
+  if (S.role === 'admin' && S.tab === 'wait' && list.length) {
+    head += `<div class="warn">有 ${list.length} 張單在等大組長／副大組長簽核。
+             行政中心不能代簽，需要的話請直接打下面單子上的關懷員電話。</div>`;
+  }
+  const late = overdueList();
+  if (late.length && ['out', 'all', 'wait'].includes(S.tab)) {
+    head += `<div class="warn bad">⚠ 有 ${late.length} 位學員已超過預計回來時間還沒銷假：
+             ${late.map(x => esc(x.name)).join('、')}</div>`;
+  }
+  if (!list.length) return head + `<div class="empty">目前沒有單子</div>`;
+  return head + list.map(cardHTML).join('');
+}
+
+function cardHTML(x) {
+  const due = ts(x.due), back = ts(x.back);
+  let lateTag = '';
+  if (x.status === ST.OUT && due && Date.now() > due) {
+    lateTag = ` <span class="late">已逾時 ${mins(Date.now() - due)}</span>`;
+  } else if (x.status === ST.DONE && due && back && back - due > 60000) {
+    lateTag = ` <span class="late">逾時 ${mins(back - due)}</span>`;
+  }
+
+  let rows = `<div><span class="k">外出</span>${esc(fmt(x.out))}</div>
+              <div><span class="k">預計回</span>${esc(fmt(x.due))}${lateTag}</div>`;
+  if (x.back)   rows += `<div><span class="k">實際回</span>${esc(fmt(x.back))}</div>`;
+  if (x.phone)  rows += `<div><span class="k">學員手機</span>${telLink(x.phone)}</div>`;
+  rows += `<div><span class="k">關懷員</span>${esc(x.care)}　${telLink(x.carePhone)}</div>`;
+  if (x.reason) rows += `<div><span class="k">事由</span>${esc(x.reason)}</div>`;
+  if (x.approver && x.status !== ST.REJECT) {
+    rows += `<div><span class="k">簽核</span>${esc(x.approver)}（${esc(x.approverRole)}）${esc(fmt(x.approvedAt))}</div>`;
+  }
+  if (x.rejectReason) {
+    rows += `<div class="why"><b>${esc(x.approver)} 退回：</b>${esc(x.rejectReason)}</div>`;
+  }
+
+  const open = S.openLog[x.no];
+  const log = Array.isArray(x.log) ? x.log : [];
+  return `<div class="lv ${CLS[x.status] || ''}">
+    <div class="lv-h"><span class="lv-n">${esc(x.no)}</span>
+      <span class="lv-s">${esc(x.status)}</span></div>
+    <div class="lv-name">${esc(x.name)}<small>${esc(x.grp)}　房 ${esc(x.room || '—')}</small></div>
+    <div class="lv-b">${rows}</div>
+    <div class="acts">${actionsHTML(x)}</div>
+    ${open ? `<div class="log">${log.map(e =>
+        esc(`${e.at}　${e.who}（${e.role}）${e.what}`)).join('<br>') || '（沒有紀錄）'}</div>` : ''}
+    <div class="fold" onclick="toggleLog('${esc(x.no)}')">${open ? '收起紀錄 ▲' : '展開紀錄 ▼'}</div>
+  </div>`;
+}
+function toggleLog(no) { S.openLog[no] = !S.openLog[no]; render(); }
+
+function actionsHTML(x) {
+  let h = '';
+  if (x.status === ST.WAIT && ['lead', 'deputy'].includes(S.role)) {
+    h += `<button class="btn ok sm" onclick="doApprove('${x.no}')">同意簽核，放行</button>
+          <button class="btn no sm" onclick="doReject('${x.no}')">退回（要填原因）</button>`;
+  }
+  if (x.status === ST.OUT && ['care', 'admin'].includes(S.role)) {
+    h += `<button class="btn sm" onclick="doClose('${x.no}')">學員已回營 → 銷假</button>`;
+  }
+  if ([ST.WAIT, ST.REJECT].includes(x.status) && S.role === 'care') {
+    h += `<div class="row2">
+      <button class="btn sm dark" onclick="editLeave('${x.no}')">修改${x.status === ST.REJECT ? '後重送' : ''}</button>
+      <button class="btn sm grey" onclick="doCancel('${x.no}')">取消這張單</button></div>`;
+  }
+  return h;
+}
+
+/* ══════════ 關懷員：填單 ══════════ */
+
+var editingNo = '';    // 空 = 新單；有值 = 正在改哪一張
+
+function formHTML() {
+  if (!S.students.length) {
+    return `<div class="warn">還沒有學員名單。請按右上角「⋯」→「同步學員名單」，
+            系統會去報到名單抄一份過來（只讀取，不會動到報到名單）。</div>`;
+  }
+  const groups = [...new Set(S.students.map(x => x.grp).filter(Boolean))].sort();
+  const now = new Date();
+  return `<div class="card">
+    <div style="font-weight:bold;color:var(--c-deep)">
+      ${editingNo ? '修改請假單 ' + esc(editingNo) : '填新的請假單'}</div>
+    <div style="font-size:12px;color:var(--c-dim);line-height:1.7;margin:4px 0 12px">
+      送出後由大組長或副大組長簽核，簽核通過學員才可以離營。</div>
+
+    <label class="req">組別</label>
+    <select id="fGrp" onchange="fillStudents()">
+      <option value="">請選組別</option>
+      ${groups.map(g => `<option value="${esc(g)}">${esc(g)}</option>`).join('')}
+    </select>
+
+    <label class="req">學員姓名</label>
+    <select id="fName" onchange="fillRoom()"><option value="">先選組別</option></select>
+
+    <label>房號</label>
+    <input type="text" id="fRoom" placeholder="會依名單自動帶入，可以改">
+
+    <label class="req">學員行動電話</label>
+    <input type="tel" id="fPhone" inputmode="tel" placeholder="報到名單上沒有，請當場問學員">
+
+    <label>事由（選填，但大組長會靠這個判斷）</label>
+    <input type="text" id="fReason" placeholder="例：看牙醫、家人來訪">
+
+    <label class="req">外出時間</label>
+    <input type="datetime-local" id="fOut" value="${toInput(now)}">
+    <div class="quick">
+      <button onclick="setNow('fOut')">現在</button>
+      <button onclick="bump('fOut',30)">＋30 分</button>
+      <button onclick="bump('fOut',60)">＋1 小時</button>
+    </div>
+
+    <label class="req">預計回來時間</label>
+    <input type="datetime-local" id="fDue" value="${toInput(new Date(now.getTime() + 7200000))}">
+    <div class="quick">
+      <button onclick="dueFromOut(60)">外出＋1 小時</button>
+      <button onclick="dueFromOut(120)">＋2 小時</button>
+      <button onclick="dueFromOut(180)">＋3 小時</button>
+      <button onclick="dueFromOut(360)">＋6 小時</button>
+    </div>
+
+    <label class="req">關懷員（你）</label>
+    <input type="text" id="fCare" value="${esc(S.op)}">
+    <label class="req">關懷員電話</label>
+    <input type="tel" id="fCarePhone" inputmode="tel" value="${esc(S.myPhone)}">
+
+    <button class="btn" id="fBtn" onclick="submitForm()">
+      ${editingNo ? '送出修改，重新等待簽核' : '送出請假申請'}</button>
+    ${editingNo ? `<button class="btn sm grey" onclick="cancelEdit()">放棄修改</button>` : ''}
+    <div id="fMsg" class="msg err"></div>
+  </div>`;
+}
+
+/* 學員選單依組別過濾。150 位擺在一個下拉裡，手機上要滑很久還容易點錯人。 */
+function fillStudents() {
+  const g = $('fGrp').value;
+  $('fName').innerHTML = '<option value="">請選學員</option>' +
+    S.students.filter(x => x.grp === g).map(x =>
+      `<option value="${esc(x.name)}" data-sid="${esc(x.sid)}" data-room="${esc(x.room)}">${esc(x.name)}</option>`
+    ).join('');
+  $('fRoom').value = '';
+  saveDraft();
+}
+function fillRoom() {
+  const o = $('fName').selectedOptions[0];
+  if (o) $('fRoom').value = o.dataset.room || '';
+  saveDraft();
+}
+function setNow(id)  { $(id).value = toInput(new Date()); saveDraft(); }
+function bump(id, m) { $(id).value = toInput(new Date(new Date($(id).value || Date.now()).getTime() + m*60000)); saveDraft(); }
+function dueFromOut(m) {
+  $('fDue').value = toInput(new Date(new Date($('fOut').value || Date.now()).getTime() + m*60000));
+  saveDraft();
+}
+
+/* 送出失敗、被別的通知搶走、不小心切走 —— 都不該讓填好的單消失 */
+const DRAFT = ['fGrp','fName','fRoom','fPhone','fReason','fOut','fDue','fCare','fCarePhone'];
+function saveDraft() {
+  if (editingNo) return;
+  const d = {};
+  DRAFT.forEach(k => { const e = $(k); if (e) d[k] = e.value; });
+  try { localStorage.setItem(K.draft, JSON.stringify(d)); } catch (e) {}
+}
+function clearDraft() { localStorage.removeItem(K.draft); }
+
+function afterForm() {
+  if (!$('fGrp')) return;
+  if (editingNo) {
+    const x = S.leaves.find(l => l.no === editingNo);
+    if (!x) { editingNo = ''; render(); return; }
+    // 改單只能改時間、電話、房號、事由。組別和學員不給改 —— 換人就是另一張單了
+    $('fGrp').innerHTML  = `<option>${esc(x.grp)}</option>`;
+    $('fName').innerHTML = `<option>${esc(x.name)}</option>`;
+    $('fGrp').disabled = $('fName').disabled = $('fCare').disabled = true;
+    $('fRoom').value      = x.room;
+    $('fPhone').value     = x.phone;
+    $('fReason').value    = x.reason;
+    $('fOut').value       = toInput(new Date(x.out));
+    $('fDue').value       = toInput(new Date(x.due));
+    $('fCare').value      = x.care;
+    $('fCarePhone').value = x.carePhone;
+    if (x.rejectReason) {
+      $('fMsg').innerHTML = `上次被 ${esc(x.approver)} 退回：${esc(x.rejectReason)}`;
+    }
+  } else {
+    let d = {};
+    try { d = JSON.parse(localStorage.getItem(K.draft) || '{}'); } catch (e) {}
+    if (d.fGrp) {
+      $('fGrp').value = d.fGrp;
+      fillStudents();
+      DRAFT.forEach(k => { const e = $(k); if (e && d[k] !== undefined) e.value = d[k]; });
+    }
+    DRAFT.forEach(k => { const e = $(k); if (e) e.addEventListener('change', saveDraft); });
+  }
+}
+
+function editLeave(no) { editingNo = no; S.tab = 'new'; render(); window.scrollTo(0, 0); }
+function cancelEdit()  { editingNo = ''; render(); }
+
+async function submitForm() {
+  const sel = $('fName').selectedOptions[0];
+  const f = {
+    grp:       $('fGrp').value.trim(),
+    name:      $('fName').value.trim(),
+    sid:       (sel && sel.dataset ? sel.dataset.sid : '') || '',
+    room:      $('fRoom').value.trim(),
+    phone:     $('fPhone').value.trim(),
+    reason:    $('fReason').value.trim(),
+    out:       toIso($('fOut').value),
+    due:       toIso($('fDue').value),
+    care:      $('fCare').value.trim(),
+    carePhone: $('fCarePhone').value.trim()
+  };
+  const need = [['grp','組別'], ['name','學員姓名'], ['phone','學員行動電話'], ['out','外出時間'],
+                ['due','預計回來時間'], ['care','關懷員姓名'], ['carePhone','關懷員電話']];
+  for (const [k, label] of need) {
+    if (!f[k]) { $('fMsg').innerText = '請填「' + label + '」'; return; }
+  }
+  if (new Date(f.due) <= new Date(f.out)) {
+    $('fMsg').innerText = '預計回來時間要晚於外出時間'; return;
+  }
+
+  const ok = confirm(editingNo
+    ? `修改 ${editingNo}（${f.name}）\n外出 ${fmt(f.out)}\n預計回 ${fmt(f.due)}\n\n送出後會重新等待簽核。`
+    : `${f.grp}　${f.name}\n外出 ${fmt(f.out)}\n預計回 ${fmt(f.due)}\n\n送出後大組長／副大組長會收到通知，簽核通過學員才可以離營。`);
+  if (!ok) return;
+
+  $('fBtn').disabled = true;
+  busy(true, '送出中…');
+  try {
+    if (editingNo) {
+      const r = await rpc('lv_update', { p_code: code(), p: { ...f, no: editingNo, op: S.op } });
+      firePush('new', r.no);
+      editingNo = '';
+      toast('已重新送審');
+    } else {
+      const r = await rpc('lv_create', { p_code: code(), p: f });
+      firePush('new', r.no);
+      clearDraft();
+      localStorage.setItem(K.phone, f.carePhone);
+      S.myPhone = f.carePhone;
+      toast(`已送出，單號 ${esc(r.no)}，等待簽核`);
+    }
+    S.tab = 'mine';
+    await refresh(false);
+  } catch (e) {
+    // 刻意不清表單：訊號不好的時候換個地方按一次就好，不要叫人重打一遍
+    $('fMsg').innerText = e.message;
+    toast('送出失敗：' + esc(e.message) + '<br>單子還留在畫面上，換個地方再按一次。', 9000);
+  } finally {
+    /* 送出成功之後會切到「單子狀況」頁籤並重繪，這顆按鈕早就不存在了。
+       不檢查就會在這裡丟例外，busy(false) 跑不到 ——
+       結果是單子明明送出去了，畫面卻永遠卡在「處理中…」。 */
+    const b = $('fBtn');
+    if (b) b.disabled = false;
+    busy(false);
+  }
+}
+
+/* ══════════ 簽核 / 退回 / 銷假 / 取消 ══════════ */
+
+async function act(label, fn, args, event, no, okMsg) {
+  busy(true, label + '…');
+  try {
+    await rpc(fn, args);
+    if (event) firePush(event, no);
+    toast(okMsg);
+    await refresh(false);
+  } catch (e) {
+    alert(label + '失敗：\n\n' + e.message);
+    await refresh(false);
+  } finally { busy(false); }
+}
+
+function doApprove(no) {
+  const x = S.leaves.find(l => l.no === no); if (!x) return;
+  if (!confirm(`同意 ${x.grp} ${x.name} 的請假？\n\n外出 ${fmt(x.out)}\n預計回 ${fmt(x.due)}` +
+               (x.reason ? `\n事由 ${x.reason}` : '') +
+               `\n\n簽核人會記為「${S.op}（${S.label}）」。`)) return;
+  return act('簽核', 'lv_approve', { p_code: code(), p_no: no, p_op: S.op },
+      'approved', no, `已簽核：${esc(x.name)} 可以離營`);
+}
+
+function doReject(no) {
+  const x = S.leaves.find(l => l.no === no); if (!x) return;
+  const why = prompt(`退回 ${x.name} 的請假單。\n\n請填原因，關懷員才知道要改什麼：`);
+  if (why === null) return;
+  if (!why.trim()) { alert('退回一定要填原因'); return; }
+  return act('退回', 'lv_reject', { p_code: code(), p_no: no, p_op: S.op, p_reason: why.trim() },
+      'rejected', no, `已退回：${esc(x.name)}`);
+}
+
+function doClose(no) {
+  const x = S.leaves.find(l => l.no === no); if (!x) return;
+  const def = toInput(new Date()).replace('T', ' ');
+  const v = prompt(`${x.name} 已經回營了嗎？\n\n實際回來時間（可以改）：`, def);
+  if (v === null) return;
+  const back = toIso(String(v).trim().replace(' ', 'T'));
+  if (!back) { alert('時間格式看不懂，請照 ' + def + ' 這個樣子填'); return; }
+  return act('銷假', 'lv_close', { p_code: code(), p_no: no, p_op: S.op, p_back: back },
+      'closed', no, `已完成銷假：${esc(x.name)}`);
+}
+
+function doCancel(no) {
+  const x = S.leaves.find(l => l.no === no); if (!x) return;
+  if (!confirm(`取消 ${x.name} 的請假單 ${no}？\n\n取消後這張單就不算了，要請假請重新填一張。`)) return;
+  return act('取消', 'lv_cancel', { p_code: code(), p_no: no, p_op: S.op }, null, no, `已取消 ${esc(no)}`);
+}
+
+/* ══════════ 推播 ══════════
+   為什麼不能只靠上面那個輪詢：手機把頁面關掉、或螢幕鎖起來之後，
+   頁面裡的 JavaScript 就停了。要在鎖屏收到通知，只有
+   Service Worker ＋ 推播服務這條路。
+
+   iOS 的限制很硬：Safari 直接開的網頁不給推播，一定要先「加入主畫面」，
+   再從主畫面那個圖示打開，才拿得到通知權限。沒辦法繞過，
+   所以下面直接偵測狀態，把該做的動作寫在畫面上。 */
+
+const IS_IOS = /iP(hone|ad|od)/.test(navigator.userAgent) ||
+               (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+function standalone() {
+  return window.navigator.standalone === true ||
+         (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+}
+function b64ToU8(s) {
+  const t = (s + '='.repeat((4 - s.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(t);
+  return Uint8Array.from(raw, c => c.charCodeAt(0));
+}
+
+function renderPushBox() {
+  const box = $('pushBox');
+  box.innerHTML = '';
+  if (!CFG.vapidPublicKey) {
+    box.innerHTML = `<div class="warn">推播還沒設定，目前靠「頁面開著自動更新＋響鈴」通知。
+      把這一頁留在前景就收得到。</div>`;
+    return;
+  }
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+    box.innerHTML = `<div class="warn">這個瀏覽器不支援推播。iPhone 請用 Safari、Android 請用 Chrome。</div>`;
+    return;
+  }
+  if (IS_IOS && !standalone()) {
+    box.innerHTML = `<div class="warn"><b>iPhone 要收鎖屏通知，必須先做這一步：</b><br>
+      1　點 Safari 下方的「分享」<br>
+      2　選「加入主畫面」<br>
+      3　關掉 Safari，改從主畫面上新出現的圖示打開這一頁<br>
+      4　回到這裡按「開啟推播」<br>
+      <span style="color:var(--c-dim)">在 Safari 裡直接按沒有用，這是 iOS 的規定，不是系統壞了。</span></div>`;
+    return;
+  }
+  if (Notification.permission === 'denied') {
+    box.innerHTML = `<div class="warn">通知被這支手機封鎖了。請到 設定 → 通知 把這個網頁的通知打開再回來。</div>`;
+    return;
+  }
+  if (Notification.permission === 'granted' && localStorage.getItem('lv_push') === '1') {
+    box.innerHTML = `<div class="card" style="padding:11px 13px;font-size:13px;color:var(--st-done)">
+      🔔 推播已開啟
+      <button class="ghost" style="float:right;font-size:12px" onclick="pushOff()">關閉</button></div>`;
+    return;
+  }
+  box.innerHTML = `<div class="card" style="padding:13px">
+    <div style="font-size:13px;line-height:1.7;margin-bottom:6px">
+      開啟推播後，手機鎖著也會跳出「有新的請假單待簽核」。</div>
+    <button class="btn sm" style="margin:0" onclick="pushOn()">開啟推播</button></div>`;
+}
+
+async function pushOn() {
+  busy(true, '設定推播…');
+  try {
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') {
+      throw new Error('你按了「不允許」，所以收不到通知。要改的話去手機的設定裡把通知打開。');
+    }
+    const reg = await navigator.serviceWorker.register('sw.js', { scope: './' });
+    await navigator.serviceWorker.ready;
+
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: b64ToU8(CFG.vapidPublicKey)
+      });
+    }
+    const j = sub.toJSON();
+    await rpc('lv_device_add', { p_code: code(), p: {
+      endpoint: sub.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth, op: S.op } });
+
+    localStorage.setItem('lv_push', '1');
+    localStorage.setItem('lv_endpoint', sub.endpoint);
+    renderPushBox();
+    toast('推播已開啟。可以請人送一張測試單試試看。');
+  } catch (e) {
+    alert('推播設定失敗：\n\n' + e.message +
+          '\n\n沒關係，把這一頁留在前景一樣收得到（會響鈴）。');
+  } finally { busy(false); }
+}
+
+async function pushOff() {
+  const ep = localStorage.getItem('lv_endpoint') || '';
+  localStorage.removeItem('lv_push');
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    const sub = reg && await reg.pushManager.getSubscription();
+    if (sub) await sub.unsubscribe();
+  } catch (e) {}
+  try { if (ep) await rpc('lv_device_del', { p_code: code(), p_endpoint: ep }); } catch (e) {}
+  renderPushBox();
+  toast('已關閉推播');
+}
+
+/* 頁面正開著時進來的推播，Service Worker 會轉一份過來，順便響鈴和更新畫面 */
+navigator.serviceWorker && navigator.serviceWorker.addEventListener('message', ev => {
+  if (!ev.data || ev.data.type !== 'push') return;
+  beep(3);
+  toast('🔔 ' + esc(ev.data.title || '有新通知') +
+        (ev.data.body ? '<br>' + esc(ev.data.body) : ''));
+  tick();
+});
+
+/* ══════════ 啟動 ══════════ */
+
+window.addEventListener('load', () => {
+  if (!window.CFG || !CFG.url || !CFG.anonKey) {
+    $('gate').innerHTML = `<div class="card"><div class="warn bad">
+      這一頁還沒設定好：leave/config.js 裡的 Supabase 網址和 anon key 是空的。<br>
+      請照 leave/README.md 的步驟填好再重新整理。</div></div>`;
+    return;
+  }
+  if (code()) {
+    boot().catch(e => showGate(/通行碼/.test(e.message) ? '通行碼已失效，請重新輸入' : e.message));
+  } else {
+    showGate('');
+  }
+  $('gCode').addEventListener('keypress', e => { if (e.key === 'Enter') $('gOp').focus(); });
+  $('gOp').addEventListener('keypress', e => { if (e.key === 'Enter') doLogin(); });
+});
+</script>
+</body>
+</html>

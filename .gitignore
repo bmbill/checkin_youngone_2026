@@ -3,5 +3,21 @@
 *.jpeg
 *.png
 
+# 例外：請假系統的 PWA 圖示。純文字圖沒有個資，
+# 而且 iOS「加入主畫面」一定要抓得到這兩個檔，不進 repo 就沒有圖示
+!leave/icons/*.png
+
 # 本機測試用（python -m http.server，測 localStorage 需要真的 http://）
 .claude/
+
+# 合併列印：名單與產出（含學員個資，同樣不能進公開 repo）
+*.xlsx
+*.docx
+QR/
+產生QRCode.exe
+
+# 本機備份壓縮檔。裡面包著整包工作目錄（含名單），
+# 而且大到不該進 git —— 一個手滑的 git add -A 就會把學員個資推上公開的 repo
+*.rar
+*.zip
+*.7z

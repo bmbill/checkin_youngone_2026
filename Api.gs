@@ -18,7 +18,16 @@ const API_CONFIG = {
 
   // ★★ 關懷員的通行碼（care.html 用），和上面那組不可以一樣 ★★
   // 留空 = 關懷員頁面停用。通行碼一律只寫在這裡，不寫進 HTML —— 那些檔案是公開的。
-  CARE_TOKEN: ''
+  CARE_TOKEN: '',
+
+  /* ★★ 請假系統來抄名單用的通行碼（唯讀），三組都不可以一樣 ★★
+     請假系統是另一套獨立的系統（Supabase），名單以這份報到名單為準，
+     所以它需要一個能讀名單的入口。這組碼只能呼叫 getRoster，
+     而 getRoster 只回「組別／姓名／預排房號／錄取編號」四個欄位，
+     連備註和報到狀態都拿不到，更不可能寫入任何一格。
+     這組碼放在 Supabase 的 Secrets 裡，不會出現在任何公開的檔案上。
+     留空 = 請假系統抄不到名單（其餘功能不受影響）。 */
+  LEAVE_TOKEN: ''
 };
 
 /* 關懷員備註欄（S）。刻意不放進下面的 COL_NAMES：
@@ -36,12 +45,17 @@ const CARE_COL_NAME = '關懷員備註';
 function role_(token) {
   if (token === API_CONFIG.TOKEN) return 'staff';
   if (API_CONFIG.CARE_TOKEN && token === API_CONFIG.CARE_TOKEN) return 'care';
+  if (API_CONFIG.LEAVE_TOKEN && token === API_CONFIG.LEAVE_TOKEN) return 'leave';
   return '';
 }
 
 /* 關懷員能呼叫的動作就這三個。權限擋在這裡而不是只靠前端少放按鈕 ——
    前端是公開的靜態檔，誰都能自己組一個網址出來。 */
 const CARE_ACTIONS = ['getAllData', 'getDeltaUpdates', 'careNote', 'careEdit'];
+
+/* 請假系統只能做這一件事。連 getAllData 都不給 —— 那支會回整份名單，
+   包含備註、報到狀態、行李照網址，請假系統一個都不需要。 */
+const LEAVE_ACTIONS = ['getRoster'];
 
 /* ══════════ 欄位定位：認標題，不認位置 ══════════ */
 /**
@@ -222,8 +236,14 @@ function handleApi_(p) {
     if (role === 'care' && CARE_ACTIONS.indexOf(p.action) < 0) {
       return jsonOut_({ error: 'FORBIDDEN', message: '這組通行碼沒有這個權限' }, cb);
     }
+    if (role === 'leave' && LEAVE_ACTIONS.indexOf(p.action) < 0) {
+      return jsonOut_({ error: 'FORBIDDEN', message: '這組通行碼只能讀名單' }, cb);
+    }
 
     switch (p.action) {
+      case 'getRoster':
+        return jsonOut_(getRosterForLeave_(), cb);
+
       case 'getAllData':
         // 角色回給前端，讓它知道該待在哪一頁（幹部碼開到關懷員頁會自己轉走，反之亦然）
         var all = getAllData();
@@ -505,6 +525,52 @@ function getAllData() {
     sysIndices: idx
   };
 }
+
+/* ══════════ 給請假系統抄的名單（唯讀） ══════════ */
+/**
+ * 請假系統（另一套獨立系統，資料在 Supabase）需要一份學員清單來填請假單。
+ * 名單的唯一來源是這份報到名單，所以它會定時來抄一份。
+ *
+ * 這支刻意只回四個欄位，而且整支沒有任何 setValue —— 讀名單這件事
+ * 不該有機會動到報到台正在用的資料。
+ *
+ * 欄位用標題名稱定位，跟 sysIdx_ 同一個原則：標題被改掉就直接報錯，
+ * 不要默默抄到隔壁欄去。這裡另外寫一份而不是共用 COL_NAMES，
+ * 是為了讓報到系統的四個必要欄位跟這裡完全脫鉤 ——
+ * 就算哪天名單上沒有「預排房號」這一欄，報到台也必須照常運作。
+ */
+function getRosterForLeave_() {
+  var sheet = SpreadsheetApp.getActive().getSheetByName(CONFIG.SOURCE_SHEET);
+  var data    = sheet.getDataRange().getDisplayValues();
+  var headers = data[0] || [];
+
+  var want = { sid: '錄取編號', name: '姓名', grp: '組別', room: '預排房號' };
+  var idx = {}, missing = [];
+  Object.keys(want).forEach(function (k) {
+    var i = headers.indexOf(want[k]);
+    if (i < 0) missing.push(want[k]);
+    idx[k] = i;
+  });
+  if (missing.length) {
+    return { error: 'NO_COLUMN',
+             message: '名單第一列找不到欄位：' + missing.join('、') };
+  }
+
+  var roster = [];
+  for (var r = 1; r < data.length; r++) {
+    var name = String(data[r][idx.name] || '').trim();
+    var sid  = String(data[r][idx.sid]  || '').trim();
+    if (!name || !sid) continue;
+    roster.push({
+      sid:  sid,
+      name: name,
+      grp:  String(data[r][idx.grp]  || '').trim(),
+      room: String(data[r][idx.room] || '').trim()
+    });
+  }
+  return { roster: roster, count: roster.length, time: new Date().getTime() };
+}
+
 
 function getDeltaUpdates(lastSyncTime, localTotalRows) {
   var data = SpreadsheetApp.getActive().getSheetByName(CONFIG.SOURCE_SHEET).getDataRange().getDisplayValues();

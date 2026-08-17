@@ -1,0 +1,42 @@
+# Supabase 免費專案「閒置 7 天自動暫停」的解法。
+#
+# 暫停之後請假系統會整個連不上，而且要人工到後台按「Restore」才會回來 ——
+# 如果是營期第一天早上才發現，那就來不及了。這支每三天戳一下 REST API，
+# 專案就永遠不會進入閒置狀態。
+#
+# 要用的話先設兩個 repo secret（Settings → Secrets and variables → Actions）：
+#   SUPABASE_URL       https://xxxx.supabase.co
+#   SUPABASE_ANON_KEY  後台 → Project Settings → API → anon public
+# （這兩個值本來就公開在 leave/config.js 裡，放 secret 只是為了不用改動這個檔案）
+#
+# 注意：GitHub 會把「repo 連續 60 天沒有任何活動」的排程工作停掉。
+# 營期前記得到 Actions 頁面確認這支還是綠的，或手動按一次 Run workflow。
+
+name: keep-supabase-awake
+
+on:
+  schedule:
+    # 每三天一次。刻意不用整點，避開 GitHub 排程最擁擠的時段
+    - cron: '17 3 */3 * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 戳一下 Supabase
+        env:
+          URL: ${{ secrets.SUPABASE_URL }}
+          KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          if [ -z "$URL" ] || [ -z "$KEY" ]; then
+            echo "還沒設定 SUPABASE_URL / SUPABASE_ANON_KEY，跳過。"
+            exit 0
+          fi
+          code=$(curl -s -o /dev/null -w '%{http_code}' \
+                   -H "apikey: $KEY" "$URL/rest/v1/")
+          echo "HTTP $code"
+          if [ "$code" != "200" ]; then
+            echo "::error::Supabase 沒有正常回應（可能已經被暫停，請到後台按 Restore）"
+            exit 1
+          fi

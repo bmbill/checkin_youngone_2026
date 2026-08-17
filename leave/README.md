@@ -1,0 +1,236 @@
+# 卓青營 學員請假／銷假系統
+
+紙本二聯單的電子化版本。跟報到系統（`index.html`、`care.html`、`Api.gs`）是**兩套獨立的系統**：
+不同的網址、不同的資料庫、不同的通行碼。兩邊唯一的交集是請假系統會定時去**讀**一份
+報到名單當作學員清單，從頭到尾不會寫回報到那份試算表。
+
+## 流程
+
+```
+關懷員填單 ──▶ 等待簽核 ──▶ 大組長／副大組長簽核 ──▶ 請假中 ──▶ 關懷員填實際回來時間 ──▶ 完成銷假
+                  │                    │
+                  │                    └──▶ 已退回（要填原因）──▶ 關懷員改完重送
+                  └──▶ 已取消（關懷員自己取消）
+```
+
+行政中心全程唯讀，看得到四種狀態的全部單子，並可在服務台代為銷假。
+
+## 四種身分
+
+| 身分 | 能做什麼 | 不能做什麼 |
+|---|---|---|
+| 關懷員 `care` | 填單、改自己的單、取消、銷假、同步名單 | 簽核 |
+| 大組長 `lead` | 簽核、退回 | 填單、銷假 |
+| 副大組長 `deputy` | 簽核、退回 | 填單、銷假 |
+| 行政中心 `admin` | 看全部、代為銷假、同步名單 | 簽核、填單 |
+
+大組長和副大組長各自一組通行碼、可以簽核**全部**的單子；登入時填的名字會記進簽核紀錄，
+所以事後查得到每一張單是誰簽的。
+
+權限是擋在**資料庫**裡的，不是靠前端少放幾顆按鈕 —— 前端是公開的靜態網頁，
+任何人都能自己組請求。拿關懷員的碼去呼叫簽核，資料庫會直接拒絕。
+
+---
+
+# 安裝
+
+## 1. 建立 Supabase 專案並套用結構
+
+1. 到 [supabase.com](https://supabase.com) 註冊（免費，可以用 GitHub 帳號登入），
+   建一個新專案，區域選 **Northeast Asia (Tokyo)** —— 離台灣最近，反應最快。
+2. 後台左邊 **SQL Editor** → New query → 把 `supabase/schema.sql` **整份**貼上 → Run。
+3. 應該會看到 `Success`。這份 SQL 可以重複執行，不會弄掉已經有的資料。
+
+## 2. 設定四組通行碼
+
+還在 SQL Editor，把 `xxxx` 換成你們要用的碼（**四組都要不一樣，也不要跟報到系統的重複**）：
+
+```sql
+select lv_set_code('care',   '關懷員',   'xxxx');
+select lv_set_code('lead',   '大組長',   'xxxx');
+select lv_set_code('deputy', '副大組長', 'xxxx');
+select lv_set_code('admin',  '行政中心', 'xxxx');
+```
+
+通行碼只以 bcrypt 雜湊的形式存在資料庫，**不會出現在任何檔案裡**。
+之後要改就再跑一次同一句。
+
+跑完順手確認權限有收乾淨（應該只列出 12 支 `lv_` 開頭的函式，
+不能出現 `lv_set_code`、`lv_who`、`lv_all_json`、`lv_targets`、`lv_overdue_jobs`）：
+
+```sql
+select p.oid::regprocedure
+  from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+ where n.nspname = 'public' and p.proname like 'lv\_%'
+   and has_function_privilege('anon', p.oid, 'EXECUTE');
+```
+
+## 3. 填 `leave/config.js`
+
+後台 **Project Settings → API**，把兩個值填進 `leave/config.js`：
+
+```js
+url:     'https://xxxxxxxx.supabase.co',
+anonKey: 'eyJhbGciOi……',
+```
+
+`anonKey` 是公開的沒關係 —— 資料庫裡每一張表對它都是零權限，
+能呼叫的只有 12 支函式，而每一支的第一行都是驗通行碼。
+
+## 4. 讓請假系統讀得到報到名單
+
+**改 `Api.gs`（報到系統那支）：**已經幫你加好了，只要填一個值。
+`API_CONFIG.LEAVE_TOKEN` 填一組新的字串（唯讀專用，跟另外兩組都不一樣），
+然後在 Apps Script 裡 **重新部署**（部署 → 管理部署 → 編輯 → 版本選「新版本」→ 部署）。
+
+> 這個改動只加不改：新增一個 token 和一個 `getRoster` 動作，
+> 原本 staff／care 兩條路徑一個字都沒動。`getRoster` 只回
+> 組別／姓名／預排房號／錄取編號四個欄位，整支函式沒有任何寫入。
+
+## 5. 部署兩支 Edge Function
+
+後台 **Edge Functions → Deploy a new function**，可以直接在網頁上貼程式碼。
+建兩支，名字要**完全一樣**：
+
+| 名字 | 內容來源 | 做什麼 |
+|---|---|---|
+| `sync-roster` | `supabase/functions/sync-roster/index.ts` | 去報到名單抄一份學員清單 |
+| `push` | `supabase/functions/push/index.ts` | 發鎖屏推播 |
+
+如果你的後台沒有網頁編輯器，用 CLI（需要 Node.js，這台電腦已經有了）：
+
+```bash
+npx supabase login
+npx supabase link --project-ref xxxxxxxx
+npx supabase functions deploy sync-roster
+npx supabase functions deploy push
+```
+
+然後在 **Edge Functions → Secrets** 加這幾個（`SUPABASE_URL` 和
+`SUPABASE_SERVICE_ROLE_KEY` 平台會自動給，不用自己設）：
+
+| 名稱 | 值 |
+|---|---|
+| `ROSTER_API_URL` | 報到系統 Apps Script 的部署網址（`index.html` 裡的 `API_URL`） |
+| `ROSTER_TOKEN` | 上一步在 `Api.gs` 設的 `LEAVE_TOKEN` |
+| `VAPID_PUBLIC_KEY` | 下一步產生 |
+| `VAPID_PRIVATE_KEY` | 下一步產生（**絕對不要進 git**） |
+| `VAPID_SUBJECT` | `mailto:你的信箱` |
+
+## 6. 產生推播金鑰
+
+```bash
+node tools/gen_vapid.mjs
+```
+
+* 公鑰 → `leave/config.js` 的 `vapidPublicKey`
+* 私鑰 → 上面的 `VAPID_PRIVATE_KEY`
+
+**營期期間不要重跑這支**：換金鑰等於把所有訂閱作廢，每支手機都要重新開啟推播一次。
+
+想確認加密邏輯沒問題（不需要真手機）：
+
+```bash
+node tools/test_push_crypto.mjs
+```
+
+## 7. 告訴系統網頁在哪裡
+
+推播被點開時要知道要開哪個網址。SQL Editor 跑一次：
+
+```sql
+select lv_set('app_url', 'https://bmbill.github.io/checkin_youngone_2026/leave/');
+```
+
+## 8. 推上 GitHub Pages，然後同步名單
+
+`git push` 之後，網址是 `https://bmbill.github.io/checkin_youngone_2026/leave/`。
+
+用**行政中心**或**關懷員**的碼登入 → 右上角「⋯」→「同步學員名單」。
+成功會顯示抄到幾位學員。名單有變動（換房、加人、退報名）就再按一次。
+
+---
+
+# 每支手機要做的事
+
+## Android（Chrome）
+
+登入 → 按「開啟推播」→ 允許通知。完成。
+
+## iPhone（Safari）—— 一定要照這個順序
+
+iOS 不讓「在 Safari 裡直接開的網頁」發通知，**必須先加到主畫面**：
+
+1. Safari 開請假系統的網址
+2. 點下方的「分享」→「加入主畫面」
+3. **關掉 Safari**，改從主畫面上新出現的圖示打開
+4. 登入 → 按「開啟推播」→ 允許通知
+
+漏掉第 3 步的話，按「開啟推播」會失敗或看起來成功卻收不到，而且**不會有任何錯誤訊息**。
+營期前請一支一支確認過，最保險的驗證方式是：請人送一張測試單，看手機鎖屏會不會跳出來。
+
+需要 iOS 16.4 以上。太舊的手機收不到鎖屏通知，但**頁面開著的時候一樣會響鈴**。
+
+---
+
+# 通知有三層，不要只依賴一層
+
+| 層 | 什麼時候有用 | 靠什麼 |
+|---|---|---|
+| 即時訂閱 | 頁面開著 → 新單當場跳出來 | Supabase Realtime |
+| 輪詢 | 頁面開著、訂閱斷線也能用 | 每 8 秒問一次（訂閱通了放慢到 30 秒） |
+| 鎖屏推播 | 頁面關著、手機鎖著 | Web Push |
+
+推播失敗、CDN 被擋、金鑰設錯 —— 系統都還是能正常用，只是通知慢一點。
+**營期現場最可靠的用法還是「簽核的人把頁面留在前景」。**
+
+# 選用：逾時未回營自動提醒
+
+學員超過預計回來時間 30 分鐘還沒銷假時，自動推一則給行政中心和關懷員（每張單只提醒一次）。
+
+後台 **Integrations → Cron** → 新增排程 → 每 10 分鐘 → 目標選 Edge Function `push`，
+request body 填：
+
+```json
+{ "mode": "overdue" }
+```
+
+沒設這個也沒關係，頁面上本來就會用紅字標出「已逾時 25 分」，
+行政中心的「請假中」頁籤最上面也會列出所有逾時的人。
+
+# 選用：防止免費專案被暫停
+
+Supabase 免費專案**閒置 7 天會自動暫停**，暫停後要人工到後台按 Restore。
+`.github/workflows/keep-supabase-awake.yml` 每三天戳一下就不會發生。
+用法見那個檔案開頭的說明（要設兩個 repo secret）。
+
+**營期前一天務必自己開一次網頁確認連得上。**
+
+---
+
+# 資料在哪裡
+
+後台 **Table Editor**：
+
+| 表 | 內容 |
+|---|---|
+| `lv_單子`（檢視） | 給人看的請假單，時間已經換成台北時間、欄名中文，可以直接匯出 CSV |
+| `lv_leaves` | 請假單原始資料（時間是 UTC，會跟台灣差 8 小時，看 `lv_單子` 比較準） |
+| `lv_students` | 從報到名單抄過來的學員清單 |
+| `lv_devices` | 哪些手機開了推播 |
+| `lv_pushlog` | 每一次推播送給幾支、失敗原因 —— 回答「我為什麼沒收到通知」 |
+
+每張單的「紀錄」欄記著完整經過：誰幾點建立、誰幾點簽核、誰幾點銷假、被誰退回過。
+一律只增不改，事後追得回來。
+
+# 現場出問題
+
+| 症狀 | 先看這裡 |
+|---|---|
+| 一直轉圈圈、右上角的點是灰的 | Supabase 專案被暫停了 → 後台按 Restore |
+| 「通行碼錯誤」 | 確認沒有多打空白；或那組碼還沒用 `lv_set_code` 設過 |
+| 填單頁說「還沒有學員名單」 | 「⋯」→ 同步學員名單。失敗訊息會直接告訴你是報到系統那邊哪裡不對 |
+| 同步名單失敗說「回的不是 JSON」 | `Api.gs` 改完之後沒有**重新部署**（要選「新版本」） |
+| 收不到鎖屏通知 | iPhone 是不是漏了「加入主畫面」那一步；再看 `lv_pushlog` 的失敗原因 |
+| 兩個大組長同時按同意 | 第二個人會看到「這張單已經是請假中了（某某 於 14:32 處理）」，這是正常的 |
+| 手機顯示的資料是舊的 | 這個系統的 Service Worker 刻意不快取任何檔案，重新整理就是最新版 |
