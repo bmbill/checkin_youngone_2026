@@ -95,7 +95,15 @@
     .btn-action { background: var(--m-blue); color: white; border: none; padding: 10px 20px; border-radius: 20px; font-weight: bold; cursor: pointer; }
     .room-head { display: flex; justify-content: space-between; align-items: baseline; padding: 12px 15px; margin-bottom: 4px;
                  background: #fdfaf8; border: 1px solid var(--m-coffee); border-radius: 8px;
-                 color: var(--m-coffee); font-size: 18px; font-weight: bold; }
+                 color: var(--m-coffee); font-size: 18px; font-weight: bold;
+                 /* 三組數字在窄螢幕上放不進同一行，讓它自己換行到下一行去，
+                    不要硬擠成一條會被切掉的長字串 */
+                 flex-wrap: wrap; gap: 2px 10px; }
+    .room-stats { font-size: 13px; font-weight: normal; color: #aaa; white-space: nowrap; }
+    .room-stats b { font-size: 15px; }
+    .stat-ok   { color: var(--success); }
+    .stat-care { color: var(--m-blue); }
+    .stat-sep  { color: #ddd; margin: 0 4px; }
 
     .edit-container { animation: fadeIn 0.3s ease; padding-bottom: 30px; }
     .name-title { color: var(--m-coffee); font-size: 26px; font-weight: bold; margin-bottom: 12px;
@@ -647,10 +655,18 @@
       return;
     }
 
-    var noted = items.filter(function (it) { return careLines(it.values).length; }).length;
-    renderList(items, '<div class="room-head"><span>' + (g ? esc(g) : '全部') + '</span>' +
-               '<span class="status-done" style="font-weight:normal;">' +
-               items.length + ' 人　已有關懷紀錄 ' + noted + ' 人</span></div>');
+    var noted   = items.filter(function (it) { return careLines(it.values).length; }).length;
+    var arrived = items.filter(function (it) { return it.values[sysIndices.check] == '1'; }).length;
+
+    renderList(items,
+      '<div class="room-head">' +
+        '<span>' + (g ? esc(g) : '全部') + '</span>' +
+        '<span class="room-stats">' +
+          '<b>' + items.length + '</b> 人' +
+          '<span class="stat-sep">・</span>已報到 <b class="stat-ok">' + arrived + '</b> 人' +
+          '<span class="stat-sep">・</span>關懷紀錄 <b class="stat-care">' + noted + '</b> 人' +
+        '</span>' +
+      '</div>');
   }
 
   /* 備註切成一行一筆。紀錄是往後接的，所以最後面那幾行才是最新狀況。 */
