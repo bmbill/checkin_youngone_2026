@@ -704,13 +704,49 @@ async function exportExcel() {
 var seen = { wait: new Set(), mine: new Set() };
 var pollTimer = null;
 
+/* 輪詢的節奏。
+   一次輪詢只有幾百 bytes，流量不是問題 —— 耗電才是：
+   手機的行動網路模組送完資料後會維持喚醒十幾秒才降回待機，
+   固定 8 秒一次等於讓它整晚睡不著。
+   （螢幕關掉或切到別的 app 時 tick() 直接 return，那時完全不耗電。）
+
+   所以節奏跟著「現在有沒有人在等結果」走：
+     即時訂閱通了       → 30 秒。真正的通知走訂閱，輪詢只是保險
+     剛剛有人動作／有變動 → 8 秒。關懷員送出後在等簽核、大組長正在處理
+     放著沒動超過三分鐘   → 25 秒。沒人在等，不必吵醒無線電 */
+const POLL_FAST = 8000, POLL_SLOW = 25000, POLL_LIVE = 30000, POLL_ACTIVE_MS = 3 * 60000;
+var lastActive = Date.now();
+
+function bumpActivity() { lastActive = Date.now(); }
+
+function pollDelay() {
+  if (S.live) return POLL_LIVE;
+  return (Date.now() - lastActive < POLL_ACTIVE_MS) ? POLL_FAST : POLL_SLOW;
+}
+
+/* 用會自己重排的 setTimeout，不用 setInterval —— 節奏是動態的，
+   而且這樣前一次還沒回來時不會被下一次追撞。 */
 function startPolling() {
-  if (pollTimer) clearInterval(pollTimer);
-  pollTimer = setInterval(tick, S.live ? 30000 : 8000);
+  clearTimeout(pollTimer);
+  const loop = async () => {
+    try { await tick(); } catch (e) {}
+    pollTimer = setTimeout(loop, pollDelay());
+  };
+  pollTimer = setTimeout(loop, pollDelay());
+
   document.removeEventListener('visibilitychange', onVisible);
   document.addEventListener('visibilitychange', onVisible);
+  // 手指一碰就當作「有人在等結果」，節奏立刻回到 8 秒
+  ['pointerdown', 'keydown'].forEach(ev =>
+    document.addEventListener(ev, bumpActivity, { passive: true }));
 }
-function onVisible() { if (!document.hidden) tick(); }
+
+function onVisible() {
+  if (document.hidden) return;
+  bumpActivity();      // 切回這一頁 = 有人在看，先快起來
+  tick();
+  startPolling();
+}
 
 async function startRealtime() {
   if (CFG.realtime === false) return;
@@ -738,6 +774,8 @@ async function tick() {
     if (S.role === 'care') syncStudentsIfNeeded(p.studentsAt);
     if (p.rev === S.rev) { setNet(true); return; }
 
+    // 有東西在動 = 有人在等結果，維持快節奏
+    bumpActivity();
     const g = await rpc('lv_leaves_get', { p_code: code(), p_op: S.op }, 0);
     S.leaves = g.leaves || [];
     S.rev = g.rev;
