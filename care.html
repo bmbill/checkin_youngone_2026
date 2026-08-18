@@ -34,17 +34,21 @@
       -webkit-tap-highlight-color: transparent;
     }
 
-    .title-area { margin: 5px 0 10px 0; position: relative; }
-    /* 靠絕對定位擺右上角，標題才能維持置中 */
-    /* 手指按得到（約 44px 高）但顏色刻意壓淡：這是整場活動按不到一次的功能，
-       跟旁邊的操作搶注意力沒有好處。誤觸還有一層 confirm 擋著。 */
-    .btn-logout { position: absolute; right: 0; top: -4px; background: #fff; color: #bbb;
-                  border: 1px solid var(--m-border); border-radius: 8px;
-                  padding: 10px 14px; font-size: 13px; line-height: 1.2; }
+    .title-area { margin: 5px 0 10px 0; }
+    /* 標題列排成一列：左邊請假、右邊登出，標題吃掉中間剩下的寬度。
+       原本登出是絕對定位的，多一顆按鈕之後那樣會壓到標題文字。 */
+    .title-bar { display: flex; align-items: center; gap: 6px; }
+    .title-bar .main-title { flex: 1; min-width: 0; margin-bottom: 0; }
+    .btn-top { flex: none; background: #fff; border: 1px solid var(--m-border);
+               border-radius: 8px; padding: 10px 12px; font-size: 13px; line-height: 1.2;
+               white-space: nowrap; text-decoration: none; display: inline-block; }
+    /* 登出壓淡：整場活動按不到一次，跟旁邊的操作搶注意力沒好處。
+       請假是真的要用的功能，所以給它主色。 */
+    .btn-logout { color: #bbb; }
+    .btn-leave  { color: var(--m-blue); border-color: #ccd8ea; font-weight: bold; }
     .main-title { color: var(--m-blue); font-size: 22px; font-weight: bold; text-align: center; letter-spacing: 2px; margin-bottom: 2px; }
-    /* 右邊留出登出鈕的寬度。同步時間也是靠右的，不留的話會被那顆
-       白底按鈕壓掉最上面幾個 pixel。 */
-    .sync-time-row { text-align: right; margin-right: 5px; height: 15px; padding-right: 66px; }
+    /* 按鈕改成 flex 排在標題那一列了，這裡不用再為它們留位置 */
+    .sync-time-row { text-align: right; margin-right: 5px; height: 15px; }
     .sync-time { font-size: 11px; color: #bbb; }
     .sync-time.warning { color: var(--danger); font-weight: bold; animation: blink 1s infinite; }
 
@@ -211,8 +215,12 @@
 
 <div class="container" id="mainContainer">
   <div class="title-area">
-    <button class="btn-logout" onclick="logout()">登出</button>
-    <div class="main-title">關懷員系統</div>
+    <div class="title-bar">
+      <!-- 相對路徑：跟本頁同一個站，換網域或改 repo 名字都不用回來改 -->
+      <a class="btn-top btn-leave" href="leave/">請假</a>
+      <div class="main-title">關懷員系統</div>
+      <button class="btn-top btn-logout" onclick="logout()">登出</button>
+    </div>
     <div class="sync-time-row">
       <span id="pendingTag" class="pending-tag"></span>
       <span id="syncDisplay" class="sync-time">上次同步：--:--:--</span>
